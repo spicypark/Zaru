@@ -18,6 +18,8 @@ export function useHearSession(stream: MediaStream | null, ctx: AudioContext | n
   const [captions, dispatch] = useReducer(captionsReducer, []);
   const [status, setStatus] = useState<HearStatus>("connecting");
   const [speaking, setSpeaking] = useState(false);
+  // Kept apart from socket status so a later "ready"/"reconnecting" can't hide it.
+  const [micError, setMicError] = useState(false);
 
   useEffect(() => {
     if (!stream || !ctx) return;
@@ -50,7 +52,10 @@ export function useHearSession(stream: MediaStream | null, ctx: AudioContext | n
         if (cancelled) stop();
         else stopMic = stop;
       })
-      .catch(() => setStatus("mic-error"));
+      .catch(() => {
+        setMicError(true);
+        socket.close();
+      });
 
     return () => {
       cancelled = true;
@@ -59,5 +64,5 @@ export function useHearSession(stream: MediaStream | null, ctx: AudioContext | n
     };
   }, [stream, ctx]);
 
-  return { captions, status, speaking };
+  return { captions, status: micError ? ("mic-error" as const) : status, speaking };
 }
