@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import type { ObjectDetector } from "@mediapipe/tasks-vision";
 import { Earcons } from "../audio/earcons";
 import { ApproachTracker, createPersonDetector } from "../cv/personDetector";
@@ -66,6 +66,8 @@ type Options = {
   speaker: Speaker;
   /** Called when the camera feed looks frozen, so the caller can reopen the camera. */
   onFrozen: () => void;
+  /** While true (the user is asking a question), narration and approach alerts hold off. */
+  holdRef?: RefObject<boolean>;
 };
 
 /**
@@ -73,7 +75,15 @@ type Options = {
  * update when the view changes enough, when something urgent appears, or (with growing gaps)
  * when nothing has changed, so the user always has a current picture without constant chatter.
  */
-export function useNarration({ running, video, ctx, mirrored, speaker, onFrozen }: Options) {
+export function useNarration({
+  running,
+  video,
+  ctx,
+  mirrored,
+  speaker,
+  onFrozen,
+  holdRef,
+}: Options) {
   const [status, setStatus] = useState<"looking" | "listening">("listening");
   const [pulse, setPulse] = useState<Pulse | null>(null);
   const pulseIdRef = useRef(0);
@@ -133,7 +143,8 @@ export function useNarration({ running, video, ctx, mirrored, speaker, onFrozen 
       try {
         const recent = history.join(" | ");
         const result = await describe(image, "update", recent, reason);
-        if (stopped) return;
+        // Dropped if narration stopped, or the user started asking a question meanwhile.
+        if (stopped || holdRef?.current) return;
         const requestMs = performance.now() - triggeredAt;
         // Something new: reminders stay at the base interval. Nothing new: space them further.
         quietInterval = result.changed
@@ -211,7 +222,7 @@ export function useNarration({ running, video, ctx, mirrored, speaker, onFrozen 
         movingSince ||= now;
       }
 
-      if (inFlight || now < pausedUntil) return;
+      if (inFlight || now < pausedUntil || holdRef?.current) return;
       const sinceLast = now - lastUpdateAt;
       const change = lastSentThumb ? difference(lastSentThumb, thumb) : 1;
       const settled = settledTicks >= SETTLED_TICKS;
@@ -245,7 +256,7 @@ export function useNarration({ running, video, ctx, mirrored, speaker, onFrozen 
       if (frameCallbacks && frameHandle) video.cancelVideoFrameCallback(frameHandle);
       speaker.stop();
     };
-  }, [running, video, ctx, speaker]);
+  }, [running, video, ctx, speaker, holdRef]);
 
   // On-device person detector: instant "person approaching" without waiting on the model.
   useEffect(() => {
@@ -275,7 +286,7 @@ export function useNarration({ running, video, ctx, mirrored, speaker, onFrozen 
         );
         const now = performance.now();
         for (const event of tracker.update(boxes, now)) {
-          if (now - lastApproachRef.current < APPROACH_GAP_MS) continue;
+          if (holdRef?.current || now - lastApproachRef.current < APPROACH_GAP_MS) continue;
           lastApproachRef.current = now;
           trackEvent("zaru.see.person_approach", {});
           earcons?.hazard();
@@ -302,7 +313,7 @@ export function useNarration({ running, video, ctx, mirrored, speaker, onFrozen 
       window.clearInterval(timer);
       detector?.close();
     };
-  }, [running, video, ctx, mirrored, speaker]);
+  }, [running, video, ctx, mirrored, speaker, holdRef]);
 
   return { status: (running ? status : "stopped") as NarrationStatus, pulse };
 }

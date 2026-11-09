@@ -5,6 +5,7 @@ import { useMediaStream } from "../media/useMediaStream";
 import { keepScreenOn } from "../media/wakeLock";
 import { goToPicker } from "../modes";
 import { Speaker } from "../see/speech";
+import { useAsk, type AskState } from "../see/useAsk";
 import { trackEvent } from "../telemetry";
 import { useNarration, type NarrationStatus } from "../see/useNarration";
 
@@ -14,9 +15,16 @@ const STATUS_LABEL: Record<NarrationStatus, string> = {
   stopped: "Paused",
 };
 
+const ASK_LABEL: Record<AskState, string> = {
+  idle: "Ask a question",
+  starting: "Ask a question",
+  listening: "Listening… tap to send",
+  answering: "Thinking…",
+};
+
 export function SeeScreen() {
-  // Camera only: See mode never opens the microphone. On iPhones an open mic switches audio to
-  // call mode, which cuts off and reroutes Zaru's speech.
+  // Camera only: See mode keeps no microphone open (on iPhones an open mic switches audio to
+  // call mode, which cuts off and reroutes Zaru's speech). Ask opens the mic just while asking.
   const { state, start, restartVideo } = useMediaStream(false);
   const speaker = useMemo(() => new Speaker(), []);
   const [audioCtx, setAudioCtx] = useState<AudioContext | null>(null);
@@ -27,6 +35,7 @@ export function SeeScreen() {
   const live = state.status === "live";
 
   const onFrozen = useCallback(() => void restartVideo("frozen"), [restartVideo]);
+  const ask = useAsk({ video: live ? video : null, ctx: audioCtx, speaker });
   const { status, pulse } = useNarration({
     running: live && running,
     video: live ? video : null,
@@ -34,6 +43,7 @@ export function SeeScreen() {
     mirrored: live && state.mirrored,
     speaker,
     onFrozen,
+    holdRef: ask.holdRef,
   });
 
   useEffect(() => () => void audioCtx?.close(), [audioCtx]);
@@ -61,7 +71,7 @@ export function SeeScreen() {
     speaker.say(running ? "Narration on." : "Paused.", { interrupt: true });
   }, [running, speaker]);
 
-  // Laptop: Space toggles narration (unless a control has focus), Escape stops speaking.
+  // Laptop: Space toggles narration, Enter asks (unless a control has focus), Escape stops speech.
   useEffect(() => {
     if (!live) return;
     const onKey = (e: KeyboardEvent) => {
@@ -71,11 +81,14 @@ export function SeeScreen() {
       if (e.key === " ") {
         e.preventDefault();
         toggle();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        void ask.toggle();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [live, toggle, speaker]);
+  }, [live, toggle, speaker, ask]);
 
   const onStart = async () => {
     // Inside the tap: unlock speech and audio for the session (iOS requirement).
@@ -155,14 +168,25 @@ export function SeeScreen() {
           />
         </div>
       )}
-      <button
-        type="button"
-        className={running ? "see-toggle running" : "see-toggle"}
-        onClick={toggle}
-        aria-label={running ? "Pause narration" : "Start narration"}
-      >
-        {running ? "Pause" : "Start"}
-      </button>
+      <div className="see-bottom">
+        <button
+          type="button"
+          className={running ? "see-toggle running" : "see-toggle"}
+          onClick={toggle}
+          aria-label={running ? "Pause narration" : "Start narration"}
+        >
+          {running ? "Pause" : "Start"}
+        </button>
+        <button
+          type="button"
+          className={`see-ask ask-${ask.state}`}
+          onClick={() => void ask.toggle()}
+          disabled={ask.state === "starting" || ask.state === "answering"}
+          aria-label={ask.state === "listening" ? "Stop and send question" : "Ask a question"}
+        >
+          {ASK_LABEL[ask.state]}
+        </button>
+      </div>
     </main>
   );
 }
