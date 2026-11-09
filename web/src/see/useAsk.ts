@@ -128,9 +128,11 @@ export function useAsk({ video, ctx, speaker }: Options) {
       } catch {
         mic?.getTracks().forEach((t) => t.stop());
         backToPlayback();
-        set("idle");
+        // Stay busy (button disabled, narration held) through the settle, then speak, then idle.
+        set("answering");
         await settled();
-        speaker.say("I couldn't use the microphone.", { interrupt: true });
+        if (mountedRef.current) speaker.say("I couldn't use the microphone.", { interrupt: true });
+        set("idle");
       }
       return;
     }
@@ -140,9 +142,10 @@ export function useAsk({ video, ctx, speaker }: Options) {
     earcons.recordStop();
     const image = captureJpeg(video);
     if (!recording || !image || recording.chunks.length < MIN_FRAMES) {
-      set("idle");
+      set("answering");
       await settled();
-      speaker.say("I didn't hear a question.", { interrupt: true });
+      if (mountedRef.current) speaker.say("I didn't hear a question.", { interrupt: true });
+      set("idle");
       return;
     }
     set("answering");
