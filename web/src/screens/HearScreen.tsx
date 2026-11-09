@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { createAudioContext } from "../audio/audioContext";
+import { setAudioSession } from "../audio/audioSession";
 import { useFaceTracks } from "../cv/useFaceTracks";
 import { DebugOverlay } from "../hear/DebugOverlay";
 import { SpeechBubbles } from "../hear/SpeechBubbles";
@@ -49,7 +50,9 @@ export function HearScreen() {
   useEffect(() => () => void audioCtx?.close(), [audioCtx]);
 
   const onStart = () => {
-    // The AudioContext must be created inside the tap for iOS to let it run.
+    // Hear keeps the mic open the whole time. The AudioContext must be created inside the tap
+    // for iOS to let it run.
+    setAudioSession("play-and-record");
     setAudioCtx(createAudioContext());
     void start();
   };
