@@ -6,11 +6,15 @@ Client -> server over /ws/hear:
     {"type": "commit"} at the end of a spoken turn (pause, or a cap on long turns)
 
 Server -> client (JSON):
-  {"type": "ready"} | {"type": "delta", "item": id, "text": str}
+  {"type": "ready", "backend": "openai" | "local"} | {"type": "delta", "item": id, "text": str}
   | {"type": "final", "item": id, "text": str} | {"type": "failed", "item": id}
   | {"type": "error", "code": str}
 
-Transcription uses turn_detection=null, so a final transcript only arrives after we send
+Backends: OpenAI realtime transcription when a key is configured and reachable; otherwise
+(no key, rejected key, no quota, network failure) a local faster-whisper model on the server.
+After an OpenAI failure, new sessions use the local model for OPENAI_RETRY_AFTER_S.
+
+OpenAI transcription uses turn_detection=null, so a final transcript only arrives after we send
 input_audio_buffer.commit. Transcript text is forwarded to the phone and never logged or
 attached to telemetry.
 """
@@ -26,8 +30,10 @@ from collections import deque
 from fastapi import WebSocket, WebSocketDisconnect
 from opentelemetry.trace import Status, StatusCode
 from websockets.asyncio.client import ClientConnection, connect
+from websockets.exceptions import ConnectionClosedError, InvalidHandshake
 
 from zaru.config import Settings
+from zaru.local_stt import Transcriber, get_local_transcriber
 from zaru.telemetry import meter, tracer
 
 log = logging.getLogger(__name__)
@@ -36,6 +42,7 @@ SAMPLE_RATE = 24_000
 BYTES_PER_SECOND = SAMPLE_RATE * 2
 # OpenAI rejects commits of less than 100 ms of audio.
 MIN_COMMIT_BYTES = BYTES_PER_SECOND // 10
+_OPENAI = {"backend": "openai"}
 
 caption_latency = meter.create_histogram(
     "zaru.caption.latency_ms",
@@ -91,16 +98,16 @@ class _Turns:
             return
         self.has_text.add(item_id)
         if (t := self.commit_time.get(item_id)) is not None:
-            caption_latency.record((time.monotonic() - t) * 1000)
+            caption_latency.record((time.monotonic() - t) * 1000, _OPENAI)
 
     def finished(self, item_id: str, outcome: str) -> None:
         if outcome == "ok":
             self.first_text(item_id)
             if (t := self.commit_time.get(item_id)) is not None:
-                final_latency.record((time.monotonic() - t) * 1000)
+                final_latency.record((time.monotonic() - t) * 1000, _OPENAI)
         self.commit_time.pop(item_id, None)
         self.has_text.discard(item_id)
-        segments.add(1, {"outcome": outcome})
+        segments.add(1, {**_OPENAI, "outcome": outcome})
 
 
 async def _phone_to_openai(ws: WebSocket, upstream: ClientConnection, turns: _Turns) -> None:
@@ -111,7 +118,7 @@ async def _phone_to_openai(ws: WebSocket, upstream: ClientConnection, turns: _Tu
             return
         if (chunk := msg.get("bytes")) is not None:
             uncommitted += len(chunk)
-            audio_seconds.add(len(chunk) / BYTES_PER_SECOND)
+            audio_seconds.add(len(chunk) / BYTES_PER_SECOND, _OPENAI)
             await upstream.send(
                 json.dumps(
                     {"type": "input_audio_buffer.append", "audio": base64.b64encode(chunk).decode()}
@@ -149,44 +156,152 @@ async def _openai_to_phone(ws: WebSocket, upstream: ClientConnection, turns: _Tu
             err = event.get("error") or {}
             code = str(err.get("code") or err.get("type") or "unknown")
             log.warning("openai realtime error: %s", code)
+            if code in _FATAL_OPENAI_CODES:
+                raise _OpenAIUnavailable(code)
             await ws.send_json({"type": "error", "code": code})
+
+
+class _OpenAIUnavailable(Exception):
+    """OpenAI can't serve this session (bad key, no quota, unreachable); fall back to local."""
+
+
+# OpenAI error codes that mean "stop trying OpenAI for a while".
+_FATAL_OPENAI_CODES = {"invalid_api_key", "insufficient_quota", "model_not_found"}
+OPENAI_RETRY_AFTER_S = 60.0
+_openai_down_until = 0.0
+
+
+def _mark_openai_down() -> None:
+    global _openai_down_until
+    _openai_down_until = time.monotonic() + OPENAI_RETRY_AFTER_S
+
+
+def choose_backend(settings: Settings) -> str:
+    if settings.transcription_backend in ("openai", "local"):
+        return settings.transcription_backend
+    if settings.openai_api_key and time.monotonic() >= _openai_down_until:
+        return "openai"
+    return "local"
+
+
+async def _openai_session(ws: WebSocket, settings: Settings) -> None:
+    try:
+        upstream_cm = connect(
+            settings.openai_realtime_url,
+            additional_headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+            max_size=None,
+            open_timeout=5,
+        )
+        upstream = await upstream_cm.__aenter__()
+    except (OSError, TimeoutError, InvalidHandshake) as exc:
+        raise _OpenAIUnavailable(type(exc).__name__) from exc
+
+    try:
+        await upstream.send(json.dumps(session_update(settings.openai_live_transcribe_model)))
+        await ws.send_json({"type": "ready", "backend": "openai"})
+        turns = _Turns()
+        tasks = [
+            asyncio.create_task(_phone_to_openai(ws, upstream, turns)),
+            asyncio.create_task(_openai_to_phone(ws, upstream, turns)),
+        ]
+        try:
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                exc = task.exception()
+                if isinstance(exc, ConnectionClosedError):
+                    raise _OpenAIUnavailable("connection_closed") from exc
+                if exc:
+                    raise exc
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        with contextlib.suppress(Exception):
+            await upstream_cm.__aexit__(None, None, None)
+
+
+# Longest turn kept for local transcription; longer buffers are committed automatically.
+MAX_LOCAL_TURN_BYTES = BYTES_PER_SECOND * 15
+
+
+async def _local_session(ws: WebSocket, transcriber: Transcriber) -> None:
+    await ws.send_json({"type": "ready", "backend": "local"})
+    attrs = {"backend": "local"}
+    queue: asyncio.Queue[tuple[str, bytes, float]] = asyncio.Queue()
+
+    async def worker() -> None:
+        while True:
+            item, pcm, committed_at = await queue.get()
+            try:
+                text = await transcriber.transcribe(pcm)
+            except Exception as exc:
+                log.warning("local transcription failed: %s", type(exc).__name__)
+                segments.add(1, {**attrs, "outcome": "failed"})
+                continue
+            if not text:
+                segments.add(1, {**attrs, "outcome": "empty"})
+                continue
+            elapsed = (time.monotonic() - committed_at) * 1000
+            caption_latency.record(elapsed, attrs)
+            final_latency.record(elapsed, attrs)
+            segments.add(1, {**attrs, "outcome": "ok"})
+            await ws.send_json({"type": "final", "item": item, "text": text})
+
+    worker_task = asyncio.create_task(worker())
+    buffer = bytearray()
+    count = 0
+
+    def commit() -> None:
+        nonlocal count
+        if len(buffer) >= MIN_COMMIT_BYTES:
+            count += 1
+            queue.put_nowait((f"local_{count}", bytes(buffer), time.monotonic()))
+        buffer.clear()
+
+    try:
+        while True:
+            msg = await ws.receive()
+            if msg["type"] == "websocket.disconnect":
+                return
+            if (chunk := msg.get("bytes")) is not None:
+                buffer.extend(chunk)
+                audio_seconds.add(len(chunk) / BYTES_PER_SECOND, attrs)
+                if len(buffer) >= MAX_LOCAL_TURN_BYTES:
+                    commit()
+                continue
+            try:
+                control = json.loads(msg.get("text") or "{}")
+            except json.JSONDecodeError:
+                continue
+            if control.get("type") == "commit":
+                commit()
+    finally:
+        worker_task.cancel()
+        await asyncio.gather(worker_task, return_exceptions=True)
 
 
 async def hear_session(ws: WebSocket, settings: Settings) -> None:
     await ws.accept()
-    if not settings.openai_api_key:
-        await ws.send_json({"type": "error", "code": "missing_api_key"})
-        await ws.close(code=1011)
-        return
-
     active_sessions.add(1)
     with tracer.start_as_current_span("zaru.hear.session") as span:
-        span.set_attribute("zaru.transcribe.model", settings.openai_live_transcribe_model)
         started = time.monotonic()
+        backend = choose_backend(settings)
         try:
-            async with connect(
-                settings.openai_realtime_url,
-                additional_headers={"Authorization": f"Bearer {settings.openai_api_key}"},
-                max_size=None,
-            ) as upstream:
-                await upstream.send(
-                    json.dumps(session_update(settings.openai_live_transcribe_model))
-                )
-                await ws.send_json({"type": "ready"})
-                turns = _Turns()
-                tasks = [
-                    asyncio.create_task(_phone_to_openai(ws, upstream, turns)),
-                    asyncio.create_task(_openai_to_phone(ws, upstream, turns)),
-                ]
+            if backend == "openai":
+                span.set_attribute("zaru.transcribe.model", settings.openai_live_transcribe_model)
                 try:
-                    done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-                    for task in done:
-                        if (exc := task.exception()) and not isinstance(exc, WebSocketDisconnect):
-                            raise exc
-                finally:
-                    for task in tasks:
-                        task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                    await _openai_session(ws, settings)
+                    return
+                except _OpenAIUnavailable as exc:
+                    if settings.transcription_backend == "openai":
+                        raise
+                    _mark_openai_down()
+                    log.warning("openai unavailable (%s); using local captions", exc)
+                    span.add_event("zaru.hear.fallback_to_local", {"reason": str(exc)})
+                    backend = "local"
+            span.set_attribute("zaru.transcribe.model", settings.local_whisper_model)
+            await _local_session(ws, get_local_transcriber(settings))
         except WebSocketDisconnect:
             pass
         except Exception as exc:
@@ -196,6 +311,7 @@ async def hear_session(ws: WebSocket, settings: Settings) -> None:
             with contextlib.suppress(Exception):
                 await ws.send_json({"type": "error", "code": "upstream_unavailable"})
         finally:
+            span.set_attribute("zaru.transcribe.backend", backend)
             span.set_attribute("zaru.hear.duration_s", round(time.monotonic() - started, 1))
             active_sessions.add(-1)
             with contextlib.suppress(Exception):

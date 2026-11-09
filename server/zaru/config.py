@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     openai_transcribe_model: str = "gpt-transcribe"
     openai_realtime_url: str = "wss://api.openai.com/v1/realtime?intent=transcription"
 
+    # Captions: "auto" uses OpenAI when a key is set and reachable, else the local model.
+    transcription_backend: str = "auto"  # auto | openai | local
+    local_whisper_model: str = "base.en"
+    # Where the Whisper model lives (baked into the Docker image); None = Hugging Face cache.
+    whisper_model_dir: str | None = None
+
     # Built PWA. In Docker this is /app/static; locally it falls back to web/dist.
     static_dir: Path = REPO_DIR / "web" / "dist"
 

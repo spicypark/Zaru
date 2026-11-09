@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from websockets.asyncio.server import ServerConnection, serve
 
+from zaru import hear_relay
 from zaru.config import Settings
 from zaru.main import create_app
 
@@ -18,6 +19,7 @@ from zaru.main import create_app
 class FakeOpenAI:
     def __init__(self) -> None:
         self.received: list[dict] = []
+        self.reject_key = False
         self.auth: str | None = None
         self.port = 0
         self._ready = threading.Event()
@@ -29,6 +31,9 @@ class FakeOpenAI:
         async for raw in conn:
             event = json.loads(raw)
             self.received.append(event)
+            if self.reject_key and event["type"] == "session.update":
+                await conn.send(json.dumps({"type": "error", "error": {"code": "invalid_api_key"}}))
+                continue
             if event["type"] == "input_audio_buffer.commit":
                 item = (
                     f"item_{sum(e['type'] == 'input_audio_buffer.commit' for e in self.received)}"
@@ -92,7 +97,7 @@ def client_for(fake: FakeOpenAI, tmp_path: Path, key: str = "sk-test") -> TestCl
 def test_relays_audio_and_returns_captions(fake_openai: FakeOpenAI, tmp_path: Path) -> None:
     pcm = b"\x01\x00" * 2400  # 100 ms of 24 kHz PCM16
     with client_for(fake_openai, tmp_path).websocket_connect("/ws/hear") as ws:
-        assert ws.receive_json() == {"type": "ready"}
+        assert ws.receive_json() == {"type": "ready", "backend": "openai"}
         ws.send_text(json.dumps({"type": "speech_start"}))
         ws.send_bytes(pcm)
         ws.send_text(json.dumps({"type": "commit"}))
@@ -112,12 +117,66 @@ def test_relays_audio_and_returns_captions(fake_openai: FakeOpenAI, tmp_path: Pa
 
 def test_skips_commit_with_too_little_audio(fake_openai: FakeOpenAI, tmp_path: Path) -> None:
     with client_for(fake_openai, tmp_path).websocket_connect("/ws/hear") as ws:
-        assert ws.receive_json() == {"type": "ready"}
+        assert ws.receive_json() == {"type": "ready", "backend": "openai"}
         ws.send_bytes(b"\x00\x00" * 100)  # ~4 ms
         ws.send_text(json.dumps({"type": "commit"}))
     assert "input_audio_buffer.commit" not in [e["type"] for e in fake_openai.received]
 
 
-def test_reports_missing_api_key(fake_openai: FakeOpenAI, tmp_path: Path) -> None:
+class FakeTranscriber:
+    def __init__(self) -> None:
+        self.calls: list[bytes] = []
+
+    async def transcribe(self, pcm16: bytes) -> str:
+        self.calls.append(pcm16)
+        return "local words"
+
+
+@pytest.fixture(autouse=True)
+def local_stt(monkeypatch: pytest.MonkeyPatch) -> FakeTranscriber:
+    fake = FakeTranscriber()
+    monkeypatch.setattr(hear_relay, "get_local_transcriber", lambda _settings: fake)
+    monkeypatch.setattr(hear_relay, "_openai_down_until", 0.0)
+    return fake
+
+
+def speak_one_turn(ws) -> None:
+    ws.send_text(json.dumps({"type": "speech_start"}))
+    ws.send_bytes(b"\x01\x00" * 2400)
+    ws.send_text(json.dumps({"type": "commit"}))
+
+
+def test_uses_local_model_without_api_key(
+    fake_openai: FakeOpenAI, local_stt: FakeTranscriber, tmp_path: Path
+) -> None:
     with client_for(fake_openai, tmp_path, key="").websocket_connect("/ws/hear") as ws:
-        assert ws.receive_json() == {"type": "error", "code": "missing_api_key"}
+        assert ws.receive_json() == {"type": "ready", "backend": "local"}
+        speak_one_turn(ws)
+        assert ws.receive_json() == {"type": "final", "item": "local_1", "text": "local words"}
+    assert local_stt.calls == [b"\x01\x00" * 2400]
+    assert fake_openai.received == []
+
+
+def test_falls_back_to_local_when_openai_unreachable(tmp_path: Path) -> None:
+    settings = Settings(
+        openai_api_key="sk-test",
+        openai_realtime_url="ws://127.0.0.1:9",  # nothing listens here
+        static_dir=tmp_path / "missing",
+    )
+    with TestClient(create_app(settings)).websocket_connect("/ws/hear") as ws:
+        assert ws.receive_json() == {"type": "ready", "backend": "local"}
+        speak_one_turn(ws)
+        assert ws.receive_json()["text"] == "local words"
+
+
+def test_falls_back_to_local_when_key_rejected(fake_openai: FakeOpenAI, tmp_path: Path) -> None:
+    fake_openai.reject_key = True
+    client = client_for(fake_openai, tmp_path)
+    with client.websocket_connect("/ws/hear") as ws:
+        assert ws.receive_json() == {"type": "ready", "backend": "openai"}
+        assert ws.receive_json() == {"type": "ready", "backend": "local"}
+        speak_one_turn(ws)
+        assert ws.receive_json()["text"] == "local words"
+    # New sessions skip OpenAI for a while after a fatal error.
+    with client.websocket_connect("/ws/hear") as ws:
+        assert ws.receive_json() == {"type": "ready", "backend": "local"}
