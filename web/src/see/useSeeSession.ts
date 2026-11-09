@@ -39,6 +39,7 @@ export function useSeeSession({ video, audioStream, ctx, mirrored, speaker }: Op
   const busyRef = useRef<SeeBusy>("idle");
   const lastSummaryRef = useRef("");
   const earconsRef = useRef<Earcons | null>(null);
+  const mountedRef = useRef(true);
   // Lets the 15 s auto-stop timer call the latest toggleAsk.
   const toggleAskRef = useRef<() => Promise<void>>(async () => {});
   const recordingRef = useRef<{ chunks: ArrayBuffer[]; stop: () => void; timer: number } | null>(
@@ -102,13 +103,28 @@ export function useSeeSession({ video, audioStream, ctx, mirrored, speaker }: Op
     const recording = recordingRef.current;
     if (!recording) {
       if (busyRef.current !== "idle") return;
+      // Claim "listening" before awaiting the mic, so a second tap during startup is ignored
+      // instead of opening a second capture.
+      setBusyState("listening");
       speaker.stop();
       earconsRef.current?.recordStart();
       const chunks: ArrayBuffer[] = [];
-      const stop = await startMicCapture(ctx, audioStream, ({ pcm }) => chunks.push(pcm));
+      let stop: () => void;
+      try {
+        stop = await startMicCapture(ctx, audioStream, ({ pcm }) => chunks.push(pcm));
+      } catch {
+        if (mountedRef.current) {
+          setBusyState("idle");
+          speaker.say("I couldn't use the microphone.", { interrupt: true });
+        }
+        return;
+      }
+      if (!mountedRef.current) {
+        stop();
+        return;
+      }
       const timer = window.setTimeout(() => void toggleAskRef.current(), MAX_QUESTION_MS);
       recordingRef.current = { chunks, stop, timer };
-      setBusyState("listening");
       return;
     }
     recordingRef.current = null;
@@ -247,17 +263,18 @@ export function useSeeSession({ video, audioStream, ctx, mirrored, speaker }: Op
   }, [video, mirrored, speaker]);
 
   // Release the mic if the screen closes mid-question.
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
       const recording = recordingRef.current;
       if (recording) {
         window.clearTimeout(recording.timer);
         recording.stop();
         recordingRef.current = null;
       }
-    },
-    [],
-  );
+    };
+  }, []);
 
   return { busy, log, describeNow, toggleAsk, stopSpeaking };
 }
