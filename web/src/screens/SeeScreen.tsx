@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createAudioContext } from "../audio/audioContext";
-import { setAudioSession } from "../audio/audioSession";
 import { CameraView } from "../media/CameraView";
 import { useMediaStream } from "../media/useMediaStream";
 import { keepScreenOn } from "../media/wakeLock";
@@ -92,9 +91,8 @@ export function SeeScreen() {
   }, [live, toggle, speaker, ask]);
 
   const onStart = async () => {
-    // Inside the tap: loudspeaker playback that ignores the silent switch, then unlock speech and
-    // audio for the session (iOS requirements).
-    setAudioSession("playback");
+    // Inside the tap: unlock speech and audio for the session (iOS requirement). The audio session
+    // stays at iOS's default: forcing "playback" silenced speechSynthesis on iPhone.
     speaker.say("Starting Zaru See.", { interrupt: true });
     setAudioCtx(createAudioContext());
     const result = await start();
