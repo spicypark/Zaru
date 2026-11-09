@@ -36,7 +36,12 @@ export function SeeScreen() {
   useEffect(() => {
     if (!live) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement) return;
+      // Let focused buttons, links and inputs handle their own Enter/Space activation.
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("button, a, input, select, textarea")) {
+        if (e.key === "Escape") stopSpeaking();
+        return;
+      }
       if (e.key === " ") {
         e.preventDefault();
         void describeNow();
