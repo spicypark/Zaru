@@ -28,10 +28,11 @@ export class SpeechGate {
 
   update(rms: number, now: number): GateEvent {
     const voiced = rms > this.threshold;
-    if (!voiced) {
-      // Follow the room's background level only while nobody is talking.
-      this.noiseFloor = this.noiseFloor * 0.95 + rms * 0.05;
-    }
+    // Follow the room's background level quickly while quiet, and drift up slowly while
+    // "voiced" so a sustained rise in ambient noise (a crowd, HVAC) is eventually absorbed
+    // instead of holding the gate open forever.
+    const alpha = voiced ? 0.002 : 0.05;
+    this.noiseFloor = this.noiseFloor * (1 - alpha) + rms * alpha;
 
     if (voiced) {
       this.lastVoiceAt = now;
