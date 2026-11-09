@@ -11,6 +11,8 @@ class PcmCapture extends AudioWorkletProcessor {
     super();
     this.step = sampleRate / TARGET_RATE;
     this.phase = 0;
+    this.pos = 0;
+    this.prev = 0;
     this.acc = 0;
     this.accCount = 0;
     this.frame = new Int16Array(FRAME_SAMPLES);
@@ -34,6 +36,22 @@ class PcmCapture extends AudioWorkletProcessor {
   process(inputs) {
     const channel = inputs[0] && inputs[0][0];
     if (!channel) return true;
+
+    if (this.step < 1) {
+      // Context below 24 kHz (e.g. a 16 kHz Bluetooth headset mic): upsample by linear
+      // interpolation, so each input sample yields ~1/step output samples. `pos` is the read
+      // position relative to this block; values in [-1, 0) interpolate from the previous block.
+      while (this.pos < channel.length - 1) {
+        const i = Math.floor(this.pos);
+        const a = i < 0 ? this.prev : channel[i];
+        const b = channel[i + 1];
+        this.emit(a + (b - a) * (this.pos - i));
+        this.pos += this.step;
+      }
+      this.pos -= channel.length;
+      this.prev = channel[channel.length - 1];
+      return true;
+    }
 
     for (let i = 0; i < channel.length; i++) {
       this.acc += channel[i];
