@@ -15,7 +15,17 @@ export function CameraView({ stream, mirrored, label, onVideo }: Props) {
     const video = ref.current;
     if (!video) return;
     video.srcObject = stream;
-    void video.play().catch(() => {});
+    const play = () => void video.play().catch(() => {});
+    play();
+    // iOS pauses the <video> when the app is backgrounded or the stream is interrupted; resume
+    // it as soon as possible so the camera keeps showing (and feeding the vision models).
+    const onVisible = () => document.visibilityState === "visible" && play();
+    video.addEventListener("pause", play);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      video.removeEventListener("pause", play);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [stream]);
 
   useEffect(() => {
