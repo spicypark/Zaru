@@ -6,6 +6,8 @@ import { SpeechGate } from "./speechGate";
 
 // Audio from just before speech is detected, so first syllables aren't clipped.
 const PREROLL_FRAMES = 3;
+const OPENAI_MAX_TURN_MS = 5000;
+const LOCAL_MAX_TURN_MS = 7000;
 
 export type HearStatus = SocketStatus | "mic-error";
 
@@ -28,11 +30,16 @@ export function useHearSession(stream: MediaStream | null, ctx: AudioContext | n
     let stopMic: (() => void) | null = null;
     let cancelled = false;
 
+    const gate = new SpeechGate();
     const socket = new HearSocket((msg) => {
-      if (msg.type === "ready") setBackend(msg.backend ?? null);
+      if (msg.type === "ready") {
+        setBackend(msg.backend ?? null);
+        // Whisper does much worse on sentence fragments, so let local turns run longer before
+        // a forced commit. OpenAI keeps short turns for faster captions.
+        gate.maxTurnMs = msg.backend === "local" ? LOCAL_MAX_TURN_MS : OPENAI_MAX_TURN_MS;
+      }
       dispatch(msg);
     }, setStatus);
-    const gate = new SpeechGate();
     const preroll: ArrayBuffer[] = [];
 
     startMicCapture(ctx, stream, ({ pcm, rms }) => {
