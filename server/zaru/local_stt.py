@@ -37,7 +37,9 @@ local_latency = meter.create_histogram(
 
 
 class Transcriber(Protocol):
-    async def transcribe(self, pcm16: bytes) -> str: ...
+    async def transcribe(self, pcm16: bytes, deadline: float | None = None) -> str | None:
+        """Text for one turn, or None if `deadline` (monotonic) passed before it could start."""
+        ...
 
 
 def pcm16_24k_to_float_16k(pcm16: bytes) -> np.ndarray:
@@ -103,8 +105,12 @@ class WhisperTranscriber:
         doubtful = max((s.no_speech_prob for s in segments), default=1.0) > 0.3
         return "" if doubtful and _is_hallucination(text) else text
 
-    async def transcribe(self, pcm16: bytes) -> str:
+    async def transcribe(self, pcm16: bytes, deadline: float | None = None) -> str | None:
         async with self._run_lock:
+            # Most of the wait for the shared model happens on this lock, so check the
+            # deadline only once we hold it.
+            if deadline is not None and time.monotonic() > deadline:
+                return None
             with tracer.start_as_current_span("zaru.stt.local") as span:
                 span.set_attribute("zaru.audio.ms", len(pcm16) * 1000 // (INPUT_RATE * 2))
                 started = time.monotonic()

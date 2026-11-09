@@ -127,7 +127,7 @@ class FakeTranscriber:
     def __init__(self) -> None:
         self.calls: list[bytes] = []
 
-    async def transcribe(self, pcm16: bytes) -> str:
+    async def transcribe(self, pcm16: bytes, deadline: float | None = None) -> str | None:
         self.calls.append(pcm16)
         return "local words"
 
@@ -193,3 +193,21 @@ def test_local_skips_turns_that_waited_too_long(
         assert ws.receive_json() == {"type": "ready", "backend": "local"}
         speak_one_turn(ws)
     assert local_stt.calls == []
+
+
+def test_whisper_transcriber_skips_turn_whose_deadline_passed_while_waiting() -> None:
+    import asyncio
+    import time
+
+    from zaru.local_stt import WhisperTranscriber
+
+    transcriber = WhisperTranscriber(Settings())
+
+    async def run() -> str | None:
+        await transcriber._run_lock.acquire()  # another phone is using the model
+        task = asyncio.create_task(transcriber.transcribe(b"\x00\x00", time.monotonic() + 0.05))
+        await asyncio.sleep(0.1)
+        transcriber._run_lock.release()
+        return await task
+
+    assert asyncio.run(run()) is None

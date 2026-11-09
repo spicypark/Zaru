@@ -237,14 +237,20 @@ async def _local_session(ws: WebSocket, transcriber: Transcriber) -> None:
             item, pcm, committed_at = await queue.get()
             # The local model is shared by every phone; a caption this late is no use to a
             # deaf reader, so skip it rather than falling further behind real time.
-            if time.monotonic() - committed_at > MAX_LOCAL_QUEUE_AGE_S:
+            # The deadline is checked again inside the transcriber, after the shared model
+            # lock is taken, since that is where most of the waiting happens.
+            deadline = committed_at + MAX_LOCAL_QUEUE_AGE_S
+            if time.monotonic() > deadline:
                 segments.add(1, {**attrs, "outcome": "stale"})
                 continue
             try:
-                text = await transcriber.transcribe(pcm)
+                text = await transcriber.transcribe(pcm, deadline)
             except Exception as exc:
                 log.warning("local transcription failed: %s", type(exc).__name__)
                 segments.add(1, {**attrs, "outcome": "failed"})
+                continue
+            if text is None:
+                segments.add(1, {**attrs, "outcome": "stale"})
                 continue
             if not text:
                 segments.add(1, {**attrs, "outcome": "empty"})
