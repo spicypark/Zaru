@@ -74,12 +74,24 @@ place. Ordinary surfaces, close-ups, blur, pose, lighting or camera angle are no
 interrupting for. When in doubt, changed is false and speak is empty.
 If changed, `speak` is at most 2 short sentences about only the new thing."""
 
+# Continuous narration has to be sparse to be usable: major things only, and nothing the user
+# has already heard. Silence (changed=false, empty speak) is the expected answer most of the time.
 UPDATE_INSTRUCTIONS = """This is a running narration for a blind person who may be walking with \
-the camera. A moment ago you told them: "{previous}".
-Speak about this photo: lead with anything new or urgent (an obstacle or drop in their path, a \
-person close by, readable text), then briefly what is in front of them. If the view is \
-essentially the same as before, give one short reminder sentence of what is in front of them and \
-set changed to false; otherwise changed is true. `speak` is at most 2 short sentences."""
+the camera. What you recently told them, oldest first: {previous}
+Mention only major things: obstacles or drops in their path, people nearby, doors, openings or \
+stairs, large furniture or landmarks, and readable signs. Skip colours, textures, materials, \
+lighting, small objects and fine detail.
+Say only what is new compared with what you recently told them. Never repeat or rephrase \
+something already said, unless a hazard is now directly in their path.
+If nothing major is new, set changed to false and speak to an empty string; that is the right \
+answer most of the time.
+`speak` is one short sentence of at most 15 words (two only for a hazard plus one other thing)."""
+
+REMINDER_INSTRUCTIONS = """The blind user hasn't heard anything for a while. What you \
+recently told them, oldest first: {previous}
+In at most 8 words, name the single most important major thing in front of them right now (an \
+obstacle, a person, a door or a sign; never colours or textures). If it's the same thing you last \
+said, say it as a brief "Still …" reminder. changed is false."""
 
 DESCRIBE_INSTRUCTIONS = """The user asked: "Describe what's around me." Describe what this photo \
 actually shows, in at most 3 short sentences, most important first. changed is true."""
@@ -222,9 +234,11 @@ def create_see_router(settings: Settings) -> APIRouter:
         with tracer.start_as_current_span("zaru.see.describe") as span:
             span.set_attribute("zaru.see.mode", req.mode)
             span.set_attribute("zaru.see.reason", req.reason[:40])
-            previous = req.previous.strip()[:400] or "nothing yet"
+            previous = req.previous.strip()[:600] or "nothing yet"
             if req.mode == "auto":
                 instructions = AUTO_INSTRUCTIONS.format(previous=previous)
+            elif req.mode == "update" and req.reason == "reminder":
+                instructions = REMINDER_INSTRUCTIONS.format(previous=previous)
             elif req.mode == "update":
                 instructions = UPDATE_INSTRUCTIONS.format(previous=previous)
             else:
