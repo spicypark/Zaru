@@ -5,7 +5,7 @@ Apply alongside the standard review to `web/src/`.
 **See mode** (`web/src/see/`, `web/src/screens/SeeScreen.tsx`) must be fully usable with VoiceOver and without sight. Flag as **blocking**:
 
 - Interactive elements that are not native `<button>`/`<a>`/form controls, or that lack an accessible name.
-- Touch targets smaller than 44×44 CSS px, or more than the agreed controls on the main screen (one start button; then "Describe" and "Ask" filling the screen, plus "Switch mode" and the speech-rate setting).
+- Touch targets smaller than 44×44 CSS px, or more than the agreed controls on the main screen. The agreed See layout (owner decision): a full-screen "Start Zaru See" button; then the live camera with a large Start/Pause narration toggle, a compact "Ask a question" button (at least 44 px tall, sized by the owner), plus "Settings" (speech rate) and "Switch mode". Narration is continuous, so Ask being compact is intended, not a regression.
 - Information conveyed only visually (colour, icons, layout) with no spoken equivalent.
 - Announcements routed through `aria-live` regions in See mode. Zaru speaks with `speechSynthesis`; live regions make VoiceOver talk over it.
 - Audio or speech started outside a user gesture on first use (iOS blocks it silently).

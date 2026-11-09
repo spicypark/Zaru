@@ -392,7 +392,7 @@ main.live {
 }
 
 /* See mode: the camera is the screen; one big Start/Pause toggle */
-/* Bottom controls: Pause/Start above a large "Ask a question" (about a third of the screen). */
+/* Bottom controls: Pause/Start above a compact "Ask a question" button. */
 .see-bottom {
   position: absolute;
   left: 16px;
@@ -415,13 +415,14 @@ main.live {
 }
 
 .see-ask {
-  height: 33vh;
-  min-height: 160px;
+  /* A quarter of the earlier third-of-the-screen size; never below a comfortable tap target. */
+  height: 8.25vh;
+  min-height: 48px;
   border: 0;
   border-radius: var(--radius);
   background: var(--text);
   color: var(--ink);
-  font-size: 2.2rem;
+  font-size: 1.3rem;
   font-weight: 800;
   opacity: 0.95;
 }
