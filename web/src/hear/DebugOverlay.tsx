@@ -1,5 +1,6 @@
 import { useEffect, useState, type RefObject } from "react";
 import type { TrackedFace } from "../cv/faceTracker";
+import type { FaceStats } from "../cv/useFaceTracks";
 import { boxToScreen } from "../cv/videoMapping";
 import type { AudioDebug } from "./useHearSession";
 
@@ -8,6 +9,7 @@ type Props = {
   video: HTMLVideoElement;
   mirrored: boolean;
   audioRef: RefObject<AudioDebug>;
+  stats: FaceStats;
 };
 
 // Scale for drawing activity/level bars; values above this fill the bar.
@@ -15,8 +17,8 @@ const ACTIVITY_FULL = 0.08;
 const LEVEL_FULL = 0.1;
 
 /** Shown with ?debug=1: face boxes with ids and mouth-activity bars, plus mic level vs gate. */
-export function DebugOverlay({ faces, video, mirrored, audioRef }: Props) {
-  const [audio, setAudio] = useState<AudioDebug>({ rms: 0, threshold: 0 });
+export function DebugOverlay({ faces, video, mirrored, audioRef, stats }: Props) {
+  const [audio, setAudio] = useState<AudioDebug>({ rms: 0, threshold: 0, lastTurn: null });
 
   // The mic level lives in a ref (updated on the audio thread's schedule); sample it for display.
   useEffect(() => {
@@ -42,6 +44,23 @@ export function DebugOverlay({ faces, video, mirrored, audioRef }: Props) {
           </div>
         );
       })}
+      <div className="debug-info">
+        <div>
+          faces: {stats.state} · {stats.delegate ?? "-"} · {stats.fps} fps · {stats.errors} errors
+        </div>
+        <div>
+          mic {audio.rms.toFixed(3)} / gate {audio.threshold.toFixed(3)}
+        </div>
+        {audio.lastTurn && (
+          <div>
+            turn {audio.lastTurn.turn} →{" "}
+            {audio.lastTurn.speaker === null ? "caption bar" : `#${audio.lastTurn.speaker}`} (
+            {audio.lastTurn.credits.map(([id, c]) => `#${id} ${c.toFixed(3)}`).join(", ") ||
+              "no faces"}
+            )
+          </div>
+        )}
+      </div>
       <div className="debug-level">
         <span style={{ width: `${Math.min(1, audio.rms / LEVEL_FULL) * 100}%` }} />
         <i style={{ left: `${Math.min(1, audio.threshold / LEVEL_FULL) * 100}%` }} />

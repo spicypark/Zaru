@@ -30,7 +30,7 @@ export function HearScreen() {
   const live = state.status === "live";
   // The mic-only stream survives camera flips, so captions keep running while switching.
   const audioStream = live ? state.audioStream : null;
-  const { faces, tracksRef } = useFaceTracks(live ? video : null);
+  const { faces, stats: faceStats, tracksRef } = useFaceTracks(live ? video : null);
   const { captions, status, speaking, backend, turnSpeakers, audioDebugRef } = useHearSession(
     audioStream,
     audioCtx,
@@ -104,6 +104,7 @@ export function HearScreen() {
           video={video}
           mirrored={state.mirrored}
           audioRef={audioDebugRef}
+          stats={faceStats}
         />
       )}
       <div className={speaking ? "hear-status speaking" : "hear-status"} aria-hidden="true">

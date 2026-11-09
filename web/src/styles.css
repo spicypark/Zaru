@@ -374,3 +374,14 @@ main.live {
   background: rgb(11 13 18 / 0.75);
   font-weight: 600;
 }
+
+.debug-info {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: calc(80px + var(--safe-top));
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgb(11 13 18 / 0.75);
+  font: 600 0.75rem/1.5 ui-monospace, monospace;
+}

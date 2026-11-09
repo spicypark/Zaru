@@ -14,7 +14,12 @@ const LOCAL_MAX_TURN_MS = 7000;
 export type HearStatus = SocketStatus | "mic-error";
 
 /** Live audio levels for the debug overlay. */
-export type AudioDebug = { rms: number; threshold: number };
+export type AudioDebug = {
+  rms: number;
+  threshold: number;
+  /** Last turn: who won (face id or null) and every face's credit. */
+  lastTurn: { turn: number; speaker: number | null; credits: [number, number][] } | null;
+};
 
 /**
  * Streams the microphone to /ws/hear while someone is speaking, collects captions, and decides
@@ -38,7 +43,7 @@ export function useHearSession(
   const [turnSpeakers, setTurnSpeakers] = useState<ReadonlyMap<number, number | null>>(
     () => new Map(),
   );
-  const audioDebugRef = useRef<AudioDebug>({ rms: 0, threshold: 0 });
+  const audioDebugRef = useRef<AudioDebug>({ rms: 0, threshold: 0, lastTurn: null });
 
   useEffect(() => {
     if (!stream || !ctx) return;
@@ -61,7 +66,7 @@ export function useHearSession(
 
     startMicCapture(ctx, stream, ({ pcm, rms }) => {
       const event = gate.update(rms, performance.now());
-      audioDebugRef.current = { rms, threshold: gate.threshold };
+      audioDebugRef.current = { ...audioDebugRef.current, rms, threshold: gate.threshold };
       if (event === "start") {
         setSpeaking(true);
         attributor.reset();
@@ -80,6 +85,10 @@ export function useHearSession(
         const speaker = attributor.finish();
         const thisTurn = turn;
         setTurnSpeakers((prev) => new Map(prev).set(thisTurn, speaker));
+        audioDebugRef.current = {
+          ...audioDebugRef.current,
+          lastTurn: { turn: thisTurn, speaker, credits: attributor.lastCredits },
+        };
         socket.sendCommit(thisTurn, speaker !== null);
         if (!gate.isSpeaking) setSpeaking(false);
       }

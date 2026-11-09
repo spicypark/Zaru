@@ -12,6 +12,8 @@ const MIN_LEAD_RATIO = 1.4;
  */
 export class TurnAttributor {
   private credit = new Map<number, number>();
+  /** The last finished turn's per-face credit, highest first (for the debug overlay). */
+  lastCredits: [number, number][] = [];
 
   reset(): void {
     this.credit.clear();
@@ -26,6 +28,7 @@ export class TurnAttributor {
   /** Returns the speaking face's id, or null if no face clearly spoke. Resets for the next turn. */
   finish(): number | null {
     const ranked = [...this.credit.entries()].sort((a, b) => b[1] - a[1]);
+    this.lastCredits = ranked;
     this.credit.clear();
     const [best, second] = ranked;
     if (!best || best[1] < MIN_TOTAL_ACTIVITY) return null;
