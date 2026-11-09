@@ -1,19 +1,30 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+export type Facing = "environment" | "user";
+
 export type MediaState =
   | { status: "idle" }
   | { status: "starting" }
-  | { status: "live"; stream: MediaStream; mirrored: boolean }
+  | {
+      status: "live";
+      /** Camera + mic, for display. Replaced when the camera is flipped. */
+      stream: MediaStream;
+      /** Mic only, and stable across camera flips, so audio pipelines don't restart. */
+      audioStream: MediaStream;
+      mirrored: boolean;
+      /** True when the device has more than one camera (front/back). */
+      canFlip: boolean;
+    }
   | { status: "error"; message: string };
 
 export type StartResult = { ok: true; stream: MediaStream } | { ok: false; message: string };
 
 // Rear camera on phones; laptops fall back to whatever webcam exists.
-const VIDEO: MediaTrackConstraints = {
-  facingMode: { ideal: "environment" },
+const videoConstraints = (facing: Facing, exact = false): MediaTrackConstraints => ({
+  facingMode: exact ? { exact: facing } : { ideal: facing },
   width: { ideal: 1280 },
   height: { ideal: 720 },
-};
+});
 
 const AUDIO: MediaTrackConstraints = {
   echoCancellation: true,
@@ -31,38 +42,91 @@ function describeError(err: unknown): string {
   return "Could not start the camera.";
 }
 
+// Front cameras and webcams report "user" or nothing; mirror those so it feels natural.
+function isMirrored(track: MediaStreamTrack | undefined): boolean {
+  return track?.getSettings().facingMode !== "environment";
+}
+
+async function countCameras(): Promise<number> {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices.filter((d) => d.kind === "videoinput").length;
+  } catch {
+    return 1;
+  }
+}
+
 /** Must be started from a user gesture (iOS requirement). Stops all tracks on unmount. */
 export function useMediaStream(withAudio: boolean) {
   const [state, setState] = useState<MediaState>({ status: "idle" });
-  const streamRef = useRef<MediaStream | null>(null);
+  const videoTrackRef = useRef<MediaStreamTrack | null>(null);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const facingRef = useRef<Facing>("environment");
+  const flippingRef = useRef(false);
 
   const stop = useCallback(() => {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
+    videoTrackRef.current?.stop();
+    videoTrackRef.current = null;
+    audioStreamRef.current?.getTracks().forEach((t) => t.stop());
+    audioStreamRef.current = null;
+  }, []);
+
+  const publish = useCallback(async (video: MediaStreamTrack, audioStream: MediaStream) => {
+    const stream = new MediaStream([video, ...audioStream.getAudioTracks()]);
+    const canFlip = (await countCameras()) > 1;
+    setState({ status: "live", stream, audioStream, mirrored: isMirrored(video), canFlip });
+    return stream;
   }, []);
 
   const start = useCallback(async (): Promise<StartResult> => {
     setState({ status: "starting" });
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("unsupported");
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: VIDEO,
+      const media = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraints(facingRef.current),
         audio: withAudio ? AUDIO : false,
       });
       stop();
-      streamRef.current = stream;
-      // Front cameras and webcams report "user" or nothing; mirror those so it feels natural.
-      const facing = stream.getVideoTracks()[0]?.getSettings().facingMode;
-      setState({ status: "live", stream, mirrored: facing !== "environment" });
+      const video = media.getVideoTracks()[0];
+      videoTrackRef.current = video;
+      audioStreamRef.current = new MediaStream(media.getAudioTracks());
+      const stream = await publish(video, audioStreamRef.current);
       return { ok: true, stream };
     } catch (err) {
       const message = describeError(err);
       setState({ status: "error", message });
       return { ok: false, message };
     }
-  }, [withAudio, stop]);
+  }, [withAudio, stop, publish]);
+
+  /** Switch between the front and back cameras, keeping the microphone running. */
+  const flip = useCallback(async () => {
+    const audioStream = audioStreamRef.current;
+    if (!audioStream || flippingRef.current) return;
+    flippingRef.current = true;
+    const previous = facingRef.current;
+    const next: Facing = previous === "environment" ? "user" : "environment";
+    // Many phones can only open one camera at a time, so release the current one first.
+    videoTrackRef.current?.stop();
+    try {
+      const media = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraints(next, true),
+      });
+      facingRef.current = next;
+      videoTrackRef.current = media.getVideoTracks()[0];
+    } catch {
+      // Couldn't open the other camera; reopen the one we had.
+      const media = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraints(previous),
+      });
+      videoTrackRef.current = media.getVideoTracks()[0];
+    } finally {
+      flippingRef.current = false;
+    }
+    if (videoTrackRef.current) await publish(videoTrackRef.current, audioStream);
+  }, [publish]);
 
   useEffect(() => stop, [stop]);
 
-  return { state, start, stop };
+  return { state, start, stop, flip };
 }
