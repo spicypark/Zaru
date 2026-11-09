@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     openai_vision_model: str = ""
     openai_live_transcribe_model: str = "gpt-live-transcribe"
     openai_transcribe_model: str = "gpt-transcribe"
+    openai_realtime_url: str = "wss://api.openai.com/v1/realtime?intent=transcription"
 
     # Built PWA. In Docker this is /app/static; locally it falls back to web/dist.
     static_dir: Path = REPO_DIR / "web" / "dist"

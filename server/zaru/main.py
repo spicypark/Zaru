@@ -1,8 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from zaru.config import Settings, get_settings
+from zaru.hear_relay import hear_session
 from zaru.telemetry import setup_telemetry
 
 MODES = ("see", "hear")
@@ -25,6 +26,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.websocket("/ws/hear")
+    async def hear(ws: WebSocket) -> None:
+        await hear_session(ws, settings)
 
     static_dir = settings.static_dir
     if static_dir.is_dir():
