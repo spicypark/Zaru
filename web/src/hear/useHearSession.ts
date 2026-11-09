@@ -68,6 +68,9 @@ export function useHearSession(
         // a forced commit. OpenAI keeps short turns for faster captions.
         gate.maxTurnMs = msg.backend === "local" ? LOCAL_MAX_TURN_MS : OPENAI_MAX_TURN_MS;
         continuous = msg.backend === "openai";
+        // Shorter pauses end a turn on OpenAI (measured: 93% of speech in the right bubble on a
+        // recorded conversation vs 90% at 800 ms); Whisper keeps longer turns for accuracy.
+        gate.hangMs = msg.backend === "local" ? 800 : 500;
       }
       dispatch(msg);
     }, setStatus);
