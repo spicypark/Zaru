@@ -15,6 +15,8 @@ const STATUS_TEXT: Record<HearStatus, string> = {
 
 // Captions stay on screen for a while after the speaker stops.
 const CAPTION_TTL_MS = 8000;
+// Partials that never get a final (dropped connection, upstream error) expire too.
+const PARTIAL_TTL_MS = 15000;
 
 export function HearScreen() {
   const { state, start } = useMediaStream(true);
@@ -57,7 +59,9 @@ export function HearScreen() {
     );
   }
 
-  const visible = captions.filter((c) => !c.final || now - c.updatedAt < CAPTION_TTL_MS).slice(-2);
+  const visible = captions
+    .filter((c) => now - c.updatedAt < (c.final ? CAPTION_TTL_MS : PARTIAL_TTL_MS))
+    .slice(-2);
 
   return (
     <main className="hear live">
