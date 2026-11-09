@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="432" height="320" viewBox="40 90 432 320" role="img" aria-label="Zaru">
+    <circle cx="108" cy="250" r="64" fill="#86626e"/>
+    <circle cx="404" cy="250" r="64" fill="#86626e"/>
+    <circle cx="102" cy="250" r="26" fill="#1b1416"/>
+    <circle cx="410" cy="250" r="26" fill="#1b1416"/>
+    <circle cx="256" cy="250" r="156" fill="#dbafc1"/>
+    <rect x="158" y="166" width="196" height="152" rx="70" fill="#1b1416"/>
+    <path d="M194 296 L172 370 L250 314 Z" fill="#1b1416"/>
+    <rect x="200" y="222" width="34" height="44" rx="17" fill="#defffc"/>
+    <rect x="278" y="222" width="34" height="44" rx="17" fill="#defffc"/>
+</svg>

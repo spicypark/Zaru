@@ -36,7 +36,8 @@ function smoothBox(previous: Box, next: Box): Box {
   };
 }
 const MAX_CENTER_JUMP = 0.15;
-const COLORS = ["#4cc9f0", "#ffb703", "#f72585", "#80ed99", "#c77dff", "#ff8fab"];
+// Saturated, mid-luminance speaker colours: visible on white bubbles and easy to tell apart.
+const COLORS = ["#c2185b", "#5e60ce", "#0f9d8a", "#b5651d", "#86626e", "#f72585"];
 
 // Face mesh landmark indices: inner upper/lower lip, forehead top, chin.
 const UPPER_LIP = 13;
