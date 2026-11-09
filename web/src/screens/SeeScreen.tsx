@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createAudioContext } from "../audio/audioContext";
 import { CameraView } from "../media/CameraView";
 import { useMediaStream } from "../media/useMediaStream";
@@ -40,12 +40,18 @@ export function SeeScreen() {
   // Keep the screen awake while narrating: an auto-locked iPhone stops the camera.
   useEffect(() => (live && running ? keepScreenOn() : undefined), [live, running]);
 
-  const toggle = useCallback(() => {
-    setRunning((on) => {
-      speaker.say(on ? "Paused." : "Narration on.", { interrupt: true });
-      return !on;
-    });
-  }, [speaker]);
+  const toggle = useCallback(() => setRunning((on) => !on), []);
+
+  // Confirm pause/resume out loud. This effect is declared after useNarration, so it runs after
+  // the narration cleanup (which silences speech) instead of being cut off by it.
+  const announcedRef = useRef(false);
+  useEffect(() => {
+    if (!announcedRef.current) {
+      announcedRef.current = true;
+      return;
+    }
+    speaker.say(running ? "Narration on." : "Paused.", { interrupt: true });
+  }, [running, speaker]);
 
   // Laptop: Space toggles narration (unless a control has focus), Escape stops speaking.
   useEffect(() => {
