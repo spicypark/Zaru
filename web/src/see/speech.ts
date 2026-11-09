@@ -20,30 +20,47 @@ export function saveRate(rate: number): void {
 
 /**
  * Zaru's voice. Uses speechSynthesis (not aria-live), so it never talks over VoiceOver's own
- * reading of the controls. Urgent messages interrupt; others wait their turn.
+ * reading of the controls. One message at a time: urgent ones interrupt, others replace anything
+ * still waiting, so the user only ever hears current information.
  */
 export class Speaker {
   rate = loadRate();
-  private speakingUntil = 0;
+  // Safari stops speaking mid-sentence if the utterance object is garbage-collected, so keep a
+  // reference to whatever is queued or playing until it finishes.
+  private live = new Set<SpeechSynthesisUtterance>();
+  private keepAlive: number | undefined;
 
   get available(): boolean {
     return "speechSynthesis" in window;
   }
 
+  /** True while something is being spoken or waiting to be spoken. */
   get busy(): boolean {
-    return this.available && (window.speechSynthesis.speaking || Date.now() < this.speakingUntil);
+    return this.available && (this.live.size > 0 || window.speechSynthesis.speaking);
   }
 
   say(text: string, { interrupt = false }: { interrupt?: boolean } = {}): void {
     if (!this.available || !text.trim()) return;
-    if (interrupt) window.speechSynthesis.cancel();
+    const synth = window.speechSynthesis;
+    if (interrupt || this.live.size > 0) {
+      // Drop anything older: stale narration is worse than none.
+      synth.cancel();
+      this.live.clear();
+    }
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = this.rate;
     utterance.lang = "en-US";
-    // speechSynthesis.speaking can lag on iOS; keep our own estimate too.
-    this.speakingUntil = Date.now() + Math.min(15000, (text.length * 70) / this.rate);
-    utterance.onend = () => (this.speakingUntil = 0);
-    window.speechSynthesis.speak(utterance);
+    const done = () => {
+      this.live.delete(utterance);
+      if (this.live.size === 0) window.clearInterval(this.keepAlive);
+    };
+    utterance.onend = done;
+    utterance.onerror = done;
+    this.live.add(utterance);
+    // Chrome pauses long speech after ~15 s; a periodic resume keeps it going (no-op elsewhere).
+    window.clearInterval(this.keepAlive);
+    this.keepAlive = window.setInterval(() => synth.speaking && synth.resume(), 5000);
+    synth.speak(utterance);
   }
 
   setRate(rate: number): void {
@@ -54,6 +71,7 @@ export class Speaker {
   stop(): void {
     if (!this.available) return;
     window.speechSynthesis.cancel();
-    this.speakingUntil = 0;
+    this.live.clear();
+    window.clearInterval(this.keepAlive);
   }
 }
