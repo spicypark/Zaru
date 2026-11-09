@@ -17,7 +17,10 @@ export function keepScreenOn(): () => void {
   const acquire = async () => {
     if (!active || document.visibilityState !== "visible") return;
     try {
-      sentinel = await nav.wakeLock!.request("screen");
+      const granted = await nav.wakeLock!.request("screen");
+      // Released while the request was pending: let go of it straight away.
+      if (active) sentinel = granted;
+      else void granted.release().catch(() => {});
     } catch {
       // Not allowed (low battery, etc.): carry on without it.
     }
