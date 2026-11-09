@@ -36,7 +36,7 @@ function smoothBox(previous: Box, next: Box): Box {
   };
 }
 const MAX_CENTER_JUMP = 0.15;
-const COLORS = ["#4cc9f0", "#ffb703", "#f72585", "#80ed99", "#c77dff", "#ff8fab"];
+const COLORS = ["#dbafc1", "#defffc", "#86626e", "#e2e4f6", "#e7c8dd", "#f72585"];
 
 // Face mesh landmark indices: inner upper/lower lip, forehead top, chin.
 const UPPER_LIP = 13;
