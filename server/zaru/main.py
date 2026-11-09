@@ -1,8 +1,13 @@
-from fastapi import FastAPI
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, WebSocket
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from zaru.config import Settings, get_settings
+from zaru.hear_relay import hear_session
+from zaru.local_stt import get_local_transcriber
 from zaru.telemetry import setup_telemetry
 
 MODES = ("see", "hear")
@@ -19,12 +24,25 @@ def _redirect_to(path: str):
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
-    app = FastAPI(title="Zaru", docs_url=None, redoc_url=None)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        # In the Docker image the Whisper model is baked in; load it in the background at
+        # startup so the first local caption isn't delayed by model loading.
+        if settings.whisper_model_dir and settings.transcription_backend != "openai":
+            get_local_transcriber(settings).warm_up()
+        yield
+
+    app = FastAPI(title="Zaru", docs_url=None, redoc_url=None, lifespan=lifespan)
     setup_telemetry(app, settings)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.websocket("/ws/hear")
+    async def hear(ws: WebSocket) -> None:
+        await hear_session(ws, settings)
 
     static_dir = settings.static_dir
     if static_dir.is_dir():

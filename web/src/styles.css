@@ -202,3 +202,55 @@ main.live {
   background: rgb(11 13 18 / 0.75);
   font-weight: 600;
 }
+
+/* Hear mode */
+.hear-status {
+  position: absolute;
+  top: calc(12px + var(--safe-top));
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgb(11 13 18 / 0.75);
+  font-weight: 600;
+}
+
+.hear-status .dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.hear-status.speaking .dot {
+  background: var(--hear);
+  box-shadow: 0 0 0 6px rgb(76 201 240 / 0.3);
+}
+
+.caption-bar .caption {
+  margin: 0;
+}
+
+.caption-bar .caption + .caption {
+  margin-top: 6px;
+}
+
+.caption-bar .caption.partial {
+  color: var(--muted);
+}
+
+.caption-placeholder {
+  color: var(--muted);
+}
+
+.backend-tag {
+  margin-left: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.8rem;
+}
