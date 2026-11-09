@@ -1,6 +1,13 @@
 import type { ServerMessage } from "./hearSocket";
 
-export type Caption = { item: string; text: string; final: boolean; updatedAt: number };
+export type Caption = {
+  item: string;
+  /** The phone's turn number, used to look up which face spoke it. */
+  turn: number | null;
+  text: string;
+  final: boolean;
+  updatedAt: number;
+};
 
 const MAX_CAPTIONS = 6;
 
@@ -21,7 +28,13 @@ export function captionsReducer(captions: Caption[], msg: ServerMessage): Captio
     return index === -1 ? captions : captions.filter((_, i) => i !== index);
   }
 
-  const next: Caption = { item: msg.item, text, final: msg.type === "final", updatedAt: now };
+  const next: Caption = {
+    item: msg.item,
+    turn: msg.turn ?? existing?.turn ?? null,
+    text,
+    final: msg.type === "final",
+    updatedAt: now,
+  };
   const updated =
     index === -1 ? [...captions, next] : captions.map((c, i) => (i === index ? next : c));
   return updated.slice(-MAX_CAPTIONS);

@@ -2,9 +2,9 @@ export type CaptionBackend = "openai" | "local";
 
 export type ServerMessage =
   | { type: "ready"; backend?: CaptionBackend }
-  | { type: "delta"; item: string; text: string }
-  | { type: "final"; item: string; text: string }
-  | { type: "failed"; item: string }
+  | { type: "delta"; item: string; turn?: number | null; text: string }
+  | { type: "final"; item: string; turn?: number | null; text: string }
+  | { type: "failed"; item: string; turn?: number | null }
   | { type: "error"; code: string };
 
 export type SocketStatus = "connecting" | "ready" | "reconnecting" | "unavailable";
@@ -38,8 +38,13 @@ export class HearSocket {
     if (this.isReady) this.ws!.send(pcm);
   }
 
-  sendControl(type: "speech_start" | "commit"): void {
-    if (this.isReady) this.ws!.send(JSON.stringify({ type }));
+  sendSpeechStart(): void {
+    if (this.isReady) this.ws!.send(JSON.stringify({ type: "speech_start" }));
+  }
+
+  /** End of a spoken turn; `turn` comes back on that turn's captions. */
+  sendCommit(turn: number, attributed: boolean): void {
+    if (this.isReady) this.ws!.send(JSON.stringify({ type: "commit", turn, attributed }));
   }
 
   close(): void {
