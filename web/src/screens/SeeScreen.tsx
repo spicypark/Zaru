@@ -14,9 +14,12 @@ export function SeeScreen() {
   const onStart = async () => {
     // Speaking inside the tap unlocks speech synthesis on iOS for the rest of the session.
     speak("Starting Zaru See.");
-    const stream = await start();
-    speak(stream ? "Zaru See is ready." : "Zaru could not start the camera.");
+    const result = await start();
+    speak(result.ok ? "Zaru See is ready." : result.message);
   };
+
+  // No live regions in See mode: Zaru speaks every status itself, and an aria-live region would
+  // make VoiceOver read the same text over speechSynthesis.
 
   if (state.status !== "live") {
     return (
@@ -30,11 +33,7 @@ export function SeeScreen() {
           {state.status === "starting" ? "Starting…" : "Start Zaru See"}
           <span className="start-hint">Double-tap or tap anywhere to begin</span>
         </button>
-        {state.status === "error" && (
-          <p className="error" role="alert">
-            {state.message}
-          </p>
-        )}
+        {state.status === "error" && <p className="error">{state.message}</p>}
       </main>
     );
   }
@@ -42,9 +41,7 @@ export function SeeScreen() {
   return (
     <main className="see live">
       <CameraView stream={state.stream} mirrored={state.mirrored} label="Camera view" />
-      <p className="status" role="status">
-        Zaru See is ready.
-      </p>
+      <p className="status">Zaru See is ready.</p>
       <button type="button" className="switch-mode" onClick={goToPicker}>
         Switch mode
       </button>

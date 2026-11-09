@@ -6,6 +6,8 @@ export type MediaState =
   | { status: "live"; stream: MediaStream; mirrored: boolean }
   | { status: "error"; message: string };
 
+export type StartResult = { ok: true; stream: MediaStream } | { ok: false; message: string };
+
 // Rear camera on phones; laptops fall back to whatever webcam exists.
 const VIDEO: MediaTrackConstraints = {
   facingMode: { ideal: "environment" },
@@ -39,7 +41,7 @@ export function useMediaStream(withAudio: boolean) {
     streamRef.current = null;
   }, []);
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (): Promise<StartResult> => {
     setState({ status: "starting" });
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error("unsupported");
@@ -52,10 +54,11 @@ export function useMediaStream(withAudio: boolean) {
       // Front cameras and webcams report "user" or nothing; mirror those so it feels natural.
       const facing = stream.getVideoTracks()[0]?.getSettings().facingMode;
       setState({ status: "live", stream, mirrored: facing !== "environment" });
-      return stream;
+      return { ok: true, stream };
     } catch (err) {
-      setState({ status: "error", message: describeError(err) });
-      return null;
+      const message = describeError(err);
+      setState({ status: "error", message });
+      return { ok: false, message };
     }
   }, [withAudio, stop]);
 
