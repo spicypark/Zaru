@@ -42,10 +42,26 @@ class Transcriber(Protocol):
         ...
 
 
+def _lowpass_taps(cutoff_hz: float, rate: int, n: int = 63) -> np.ndarray:
+    """Windowed-sinc FIR low-pass filter, normalised to unity gain."""
+    cutoff = cutoff_hz / rate
+    m = np.arange(n) - (n - 1) / 2
+    taps = 2 * cutoff * np.sinc(2 * cutoff * m) * np.hamming(n)
+    return (taps / taps.sum()).astype(np.float32)
+
+
+# Remove content above the 16 kHz Nyquist limit (8 kHz) before downsampling, so it doesn't
+# alias into the speech band.
+_ANTI_ALIAS = _lowpass_taps(7_600, INPUT_RATE)
+
+
 def pcm16_24k_to_float_16k(pcm16: bytes) -> np.ndarray:
     audio = np.frombuffer(pcm16, dtype="<i2").astype(np.float32) / 32768.0
     if audio.size == 0:
         return audio
+    half = _ANTI_ALIAS.size // 2
+    # Edge padding avoids the filter fading the start and end of each turn towards zero.
+    audio = np.convolve(np.pad(audio, half, mode="edge"), _ANTI_ALIAS, mode="valid")
     target = int(round(audio.size * WHISPER_RATE / INPUT_RATE))
     positions = np.linspace(0, audio.size - 1, num=target, dtype=np.float32)
     return np.interp(positions, np.arange(audio.size, dtype=np.float32), audio).astype(np.float32)
