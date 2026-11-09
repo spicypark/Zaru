@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { createAudioContext } from "../audio/audioContext";
+import { useFaceTracks } from "../cv/useFaceTracks";
+import { DebugOverlay } from "../hear/DebugOverlay";
+import { SpeechBubbles } from "../hear/SpeechBubbles";
 import { useHearSession, type HearStatus } from "../hear/useHearSession";
 import { CameraView } from "../media/CameraView";
 import { useMediaStream } from "../media/useMediaStream";
@@ -18,11 +21,19 @@ const CAPTION_TTL_MS = 8000;
 // Partials that never get a final (dropped connection, upstream error) expire too.
 const PARTIAL_TTL_MS = 15000;
 
+const DEBUG = new URLSearchParams(window.location.search).has("debug");
+
 export function HearScreen() {
   const { state, start } = useMediaStream(true);
   const [audioCtx, setAudioCtx] = useState<AudioContext | null>(null);
+  const [video, setVideo] = useState<HTMLVideoElement | null>(null);
   const stream = state.status === "live" ? state.stream : null;
-  const { captions, status, speaking, backend } = useHearSession(stream, audioCtx);
+  const { faces, tracksRef } = useFaceTracks(stream ? video : null);
+  const { captions, status, speaking, backend, turnSpeakers, audioDebugRef } = useHearSession(
+    stream,
+    audioCtx,
+    tracksRef,
+  );
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -59,13 +70,40 @@ export function HearScreen() {
     );
   }
 
-  const visible = captions
-    .filter((c) => now - c.updatedAt < (c.final ? CAPTION_TTL_MS : PARTIAL_TTL_MS))
-    .slice(-2);
+  const visible = captions.filter(
+    (c) => now - c.updatedAt < (c.final ? CAPTION_TTL_MS : PARTIAL_TTL_MS),
+  );
+  const faceIds = new Set(faces.map((f) => f.id));
+  // A caption goes in its speaker's bubble while that face is on screen; otherwise (no clear
+  // speaker, or they left the frame) it goes to the caption bar so nothing is ever dropped.
+  const bubbles: { caption: (typeof visible)[number]; faceId: number }[] = [];
+  const barCaptions: typeof visible = [];
+  for (const caption of visible) {
+    const faceId = caption.turn === null ? null : (turnSpeakers.get(caption.turn) ?? null);
+    if (faceId !== null && faceIds.has(faceId)) bubbles.push({ caption, faceId });
+    else barCaptions.push(caption);
+  }
+  const barShown = barCaptions.slice(-2);
 
   return (
     <main className="hear live">
-      <CameraView stream={state.stream} mirrored={state.mirrored} label="Camera view" />
+      <CameraView
+        stream={state.stream}
+        mirrored={state.mirrored}
+        label="Camera view"
+        onVideo={setVideo}
+      />
+      {video && (
+        <SpeechBubbles faces={faces} bubbles={bubbles} video={video} mirrored={state.mirrored} />
+      )}
+      {video && DEBUG && (
+        <DebugOverlay
+          faces={faces}
+          video={video}
+          mirrored={state.mirrored}
+          audioRef={audioDebugRef}
+        />
+      )}
       <div className={speaking ? "hear-status speaking" : "hear-status"} aria-hidden="true">
         <span className="dot" />
         {status === "ready" && speaking ? "Hearing speech" : STATUS_TEXT[status]}
@@ -73,19 +111,28 @@ export function HearScreen() {
           <span className="backend-tag">Local captions</span>
         )}
       </div>
-      <div className="caption-bar" aria-live="polite">
-        {visible.length === 0 ? (
-          <span className="caption-placeholder">
-            {status === "ready" ? "Captions will appear here." : STATUS_TEXT[status]}
-          </span>
-        ) : (
-          visible.map((c) => (
-            <p key={c.item} className={c.final ? "caption" : "caption partial"}>
-              {c.text}
-            </p>
-          ))
-        )}
+      {/* Every caption is announced here for screen-reader and braille users, including the
+          ones shown in bubbles; only unattributed ones are drawn in the bar. */}
+      <div className="visually-hidden" aria-live="polite">
+        {visible.filter((c) => c.final).slice(-1).map((c) => (
+          <p key={c.item}>{c.text}</p>
+        ))}
       </div>
+      {(barShown.length > 0 || bubbles.length === 0) && (
+        <div className="caption-bar" aria-hidden="true">
+          {barShown.length === 0 ? (
+            <span className="caption-placeholder">
+              {status === "ready" ? "Captions will appear here." : STATUS_TEXT[status]}
+            </span>
+          ) : (
+            barShown.map((c) => (
+              <p key={c.item} className={c.final ? "caption" : "caption partial"}>
+                {c.text}
+              </p>
+            ))
+          )}
+        </div>
+      )}
       <button type="button" className="switch-mode" onClick={goToPicker}>
         Switch mode
       </button>

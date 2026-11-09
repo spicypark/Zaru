@@ -4,9 +4,11 @@ type Props = {
   stream: MediaStream;
   mirrored: boolean;
   label: string;
+  /** Receives the <video> element (or null on unmount), e.g. for on-device vision. */
+  onVideo?: (video: HTMLVideoElement | null) => void;
 };
 
-export function CameraView({ stream, mirrored, label }: Props) {
+export function CameraView({ stream, mirrored, label, onVideo }: Props) {
   const ref = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -15,6 +17,11 @@ export function CameraView({ stream, mirrored, label }: Props) {
     video.srcObject = stream;
     void video.play().catch(() => {});
   }, [stream]);
+
+  useEffect(() => {
+    onVideo?.(ref.current);
+    return () => onVideo?.(null);
+  }, [onVideo]);
 
   return (
     <video
