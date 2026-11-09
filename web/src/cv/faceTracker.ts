@@ -8,13 +8,18 @@ export type TrackedFace = {
   box: Box;
   /** Current mouth opening signal (jaw-open blendshape + lip gap). */
   mouth: number;
-  /** How much the mouth has been moving over the last ACTIVITY_WINDOW_MS (std-dev). */
+  /** How much the mouth has been moving recently (std-dev of the mouth signal). */
   activity: number;
   lastSeen: number;
   color: string;
 };
 
+// Activity is the std-dev of the mouth signal over at least ACTIVITY_WINDOW_MS *and* at least
+// MIN_ACTIVITY_SAMPLES detections (up to MAX_ACTIVITY_WINDOW_MS). A pure time window breaks when
+// detection runs slowly (iPhone CPU, Low Power Mode): it holds one sample and reads 0 forever.
 const ACTIVITY_WINDOW_MS = 400;
+const MIN_ACTIVITY_SAMPLES = 4;
+const MAX_ACTIVITY_WINDOW_MS = 1500;
 const TRACK_TTL_MS = 1000;
 const MIN_IOU = 0.2;
 const MAX_CENTER_JUMP = 0.15;
@@ -26,9 +31,20 @@ const LOWER_LIP = 14;
 const FOREHEAD = 10;
 const CHIN = 152;
 
-export async function createFaceLandmarker(): Promise<FaceLandmarker> {
+export type Delegate = "GPU" | "CPU";
+
+/** MediaPipe's WebGL (GPU) path is unreliable in iOS/iPadOS WebKit; use CPU there. */
+export function preferredDelegate(): Delegate {
+  const ua = navigator.userAgent;
+  const iOS = /iPhone|iPad|iPod/.test(ua) || (ua.includes("Macintosh") && navigator.maxTouchPoints > 1);
+  return iOS ? "CPU" : "GPU";
+}
+
+export async function createFaceLandmarker(
+  delegate: Delegate = preferredDelegate(),
+): Promise<{ landmarker: FaceLandmarker; delegate: Delegate }> {
   const fileset = await FilesetResolver.forVisionTasks("/mediapipe/wasm");
-  const options = (delegate: "GPU" | "CPU") => ({
+  const options = (delegate: Delegate) => ({
     baseOptions: { modelAssetPath: "/mediapipe/face_landmarker.task", delegate },
     runningMode: "VIDEO" as const,
     numFaces: 4,
@@ -37,11 +53,14 @@ export async function createFaceLandmarker(): Promise<FaceLandmarker> {
     minFacePresenceConfidence: 0.5,
     minTrackingConfidence: 0.5,
   });
-  try {
-    return await FaceLandmarker.createFromOptions(fileset, options("GPU"));
-  } catch {
-    return FaceLandmarker.createFromOptions(fileset, options("CPU"));
+  if (delegate === "GPU") {
+    try {
+      return { landmarker: await FaceLandmarker.createFromOptions(fileset, options("GPU")), delegate };
+    } catch {
+      // fall through to CPU
+    }
   }
+  return { landmarker: await FaceLandmarker.createFromOptions(fileset, options("CPU")), delegate: "CPU" };
 }
 
 function iou(a: Box, b: Box): number {
@@ -129,7 +148,13 @@ export class FaceTracker {
       track.mouth = det.mouth;
       track.lastSeen = now;
       track.history.push({ t: now, v: det.mouth });
-      while (track.history.length && now - track.history[0].t > ACTIVITY_WINDOW_MS) {
+      while (
+        track.history.length > MIN_ACTIVITY_SAMPLES &&
+        now - track.history[1].t >= ACTIVITY_WINDOW_MS
+      ) {
+        track.history.shift();
+      }
+      while (track.history.length && now - track.history[0].t > MAX_ACTIVITY_WINDOW_MS) {
         track.history.shift();
       }
       track.activity = stdDev(track.history.map((h) => h.v));
