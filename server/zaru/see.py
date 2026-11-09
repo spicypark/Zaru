@@ -74,6 +74,13 @@ place. Ordinary surfaces, close-ups, blur, pose, lighting or camera angle are no
 interrupting for. When in doubt, changed is false and speak is empty.
 If changed, `speak` is at most 2 short sentences about only the new thing."""
 
+UPDATE_INSTRUCTIONS = """This is a running narration for a blind person who may be walking with \
+the camera. A moment ago you told them: "{previous}".
+Speak about this photo: lead with anything new or urgent (an obstacle or drop in their path, a \
+person close by, readable text), then briefly what is in front of them. If the view is \
+essentially the same as before, give one short reminder sentence of what is in front of them and \
+set changed to false; otherwise changed is true. `speak` is at most 2 short sentences."""
+
 DESCRIBE_INSTRUCTIONS = """The user asked: "Describe what's around me." Describe what this photo \
 actually shows, in at most 3 short sentences, most important first. changed is true."""
 
@@ -104,7 +111,9 @@ class Scene(BaseModel):
 
 class DescribeRequest(BaseModel):
     image: str  # data URL or bare base64 JPEG
-    mode: Literal["auto", "describe"] = "describe"
+    # update: continuous narration (always spoken; `changed` tells the phone whether to slow down)
+    # auto: speak only if something changed; describe: full description on request
+    mode: Literal["update", "auto", "describe"] = "describe"
     previous: str = ""
     reason: str = ""
 
@@ -195,8 +204,11 @@ def _result(scene: Scene, mode: str, question: str | None = None) -> SeeResponse
     speak = scene.speak.strip() if (scene.changed or mode != "auto") else ""
     priority = scene.priority if speak else "none"
     announcements.add(1, {"priority": priority, "mode": mode})
+    # In update mode everything is spoken; `changed` is the model's "something is new" signal,
+    # which the phone uses to speed up or slow down its narration.
+    changed = scene.changed if mode == "update" else bool(speak)
     return SeeResponse(
-        speak=speak, priority=priority, changed=bool(speak), scene=scene.scene, question=question
+        speak=speak, priority=priority, changed=changed, scene=scene.scene, question=question
     )
 
 
@@ -210,9 +222,11 @@ def create_see_router(settings: Settings) -> APIRouter:
         with tracer.start_as_current_span("zaru.see.describe") as span:
             span.set_attribute("zaru.see.mode", req.mode)
             span.set_attribute("zaru.see.reason", req.reason[:40])
+            previous = req.previous.strip()[:400] or "nothing yet"
             if req.mode == "auto":
-                previous = req.previous.strip()[:400] or "nothing yet"
                 instructions = AUTO_INSTRUCTIONS.format(previous=previous)
+            elif req.mode == "update":
+                instructions = UPDATE_INSTRUCTIONS.format(previous=previous)
             else:
                 instructions = DESCRIBE_INSTRUCTIONS
             try:

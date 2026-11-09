@@ -112,3 +112,17 @@ def test_temperature_only_sent_to_models_that_accept_it() -> None:
     assert see._sampling_options("gpt-4.1-mini") == {"temperature": 0}
     for model in ("gpt-5.4-mini", "o4-mini", "o3"):
         assert see._sampling_options(model) == {}
+
+
+def test_update_mode_always_speaks_and_reports_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeOpenAI(scene(changed=False, priority="scene", speak="Still facing a wooden table."))
+    res = client_with(fake, tmp_path, monkeypatch).post(
+        "/api/see/describe",
+        json={"image": JPEG, "mode": "update", "previous": "A wooden table."},
+    )
+    body = res.json()
+    assert body["speak"] == "Still facing a wooden table."
+    assert body["changed"] is False
+    assert "running narration" in fake.calls[0]["input"][0]["content"][0]["text"]
