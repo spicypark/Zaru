@@ -68,9 +68,9 @@ export function useAsk({ video, ctx, speaker }: Options) {
 
   const releasedAtRef = useRef(0);
 
-  /** Back to loudspeaker playback once the mic is closed (see audioSession.ts). */
+  /** Back to iOS's default audio once the mic is closed (see audioSession.ts). */
   const backToPlayback = () => {
-    setAudioSession("playback");
+    setAudioSession("auto");
     releasedAtRef.current = performance.now();
   };
 
@@ -201,7 +201,7 @@ export function useAsk({ video, ctx, speaker }: Options) {
         window.clearTimeout(recording.timer);
         recording.stopCapture();
         recording.mic.getTracks().forEach((t) => t.stop());
-        setAudioSession("playback");
+        setAudioSession("auto");
       }
     };
   }, []);
