@@ -2,7 +2,8 @@
   --bg: #1b1416;
   --surface: #2e2125;
   --text: #defffc;
-  --muted: #e2e4f6;
+  /* Distinct from --hear and --text: idle vs speaking, partial vs final must differ. */
+  --muted: #a99ba3;
   --see: #dbafc1;
   --hear: #e2e4f6;
   --ink: #1b1416;
@@ -307,8 +308,10 @@ main.live {
   transform: translateX(-50%);
 }
 
+/* Live (not yet final) words: keep them high-contrast for readers; mark them with italics. */
 .bubble.partial {
-  color: var(--accent-deep);
+  color: #3a2a30;
+  font-style: italic;
 }
 
 /* Debug overlay (?debug=1) */
