@@ -133,6 +133,10 @@ export function useAsk({ video, ctx, speaker }: Options) {
         await settled();
         if (mountedRef.current) speaker.say("I couldn't use the microphone.", { interrupt: true });
         set("idle");
+        // Keep narration held until the line has finished, like the answer path.
+        holdRef.current = true;
+        await waitForSilence(speaker);
+        if ((stateRef.current as AskState) === "idle") holdRef.current = false;
       }
       return;
     }
@@ -146,6 +150,10 @@ export function useAsk({ video, ctx, speaker }: Options) {
       await settled();
       if (mountedRef.current) speaker.say("I didn't hear a question.", { interrupt: true });
       set("idle");
+      // Keep narration held until the line has finished, like the answer path.
+      holdRef.current = true;
+      await waitForSilence(speaker);
+      if ((stateRef.current as AskState) === "idle") holdRef.current = false;
       return;
     }
     set("answering");
