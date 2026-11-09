@@ -31,6 +31,14 @@ def test_serves_mode_pages(tmp_path: Path) -> None:
         assert client.get(f"/{mode}/").text == mode
 
 
+def test_mode_redirect_ignores_query_params(tmp_path: Path) -> None:
+    (tmp_path / "index.html").write_text("picker")
+    client = make_client(tmp_path)
+    for query in ("?mode=/evil.com", "?mode=hear"):
+        redirect = client.get(f"/see{query}", follow_redirects=False)
+        assert redirect.headers["location"] == "/see/"
+
+
 def test_runs_without_web_build(tmp_path: Path) -> None:
     res = make_client(tmp_path / "missing").get("/")
     assert res.status_code == 200
