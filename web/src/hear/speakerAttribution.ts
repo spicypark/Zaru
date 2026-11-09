@@ -2,8 +2,8 @@ import type { TrackedFace } from "../cv/faceTracker";
 
 // A face must have moved its mouth this much (summed over voiced 100 ms frames) to own a turn,
 // and clearly more than the runner-up, otherwise the caption goes to the caption bar.
-const MIN_TOTAL_ACTIVITY = 0.04;
-const MIN_LEAD_RATIO = 1.4;
+const MIN_TOTAL_ACTIVITY = 0.025;
+const MIN_LEAD_RATIO = 1.25;
 
 /**
  * Decides who spoke a turn: while the speech gate says someone is talking, each audio frame

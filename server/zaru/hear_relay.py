@@ -168,6 +168,9 @@ async def _phone_to_openai(ws: WebSocket, upstream: ClientConnection, turns: _Tu
         if control.get("type") != "commit":
             continue
         turn = _commit_turn(control)
+        # The turn is over: words that stream in from here until the next speech_start aren't
+        # part of it (with continuous streaming, those can arrive between turns).
+        turns.open_turn = None
         if uncommitted >= MIN_COMMIT_BYTES:
             turns.pending_commits.append((time.monotonic(), turn))
             uncommitted = 0

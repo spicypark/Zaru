@@ -39,7 +39,7 @@ local_latency = meter.create_histogram(
 # Conference vocabulary Whisper tends to mangle. Passed as the initial prompt, it biases
 # decoding towards these spellings without forcing them.
 VOCABULARY_PROMPT = (
-    "A conversation at KubeCon, a cloud native conference. Kubernetes, CNCF, eBPF, "
+    "A conversation at KubeCon, a cloud native conference, using Zaru. Kubernetes, CNCF, eBPF, "
     "OpenTelemetry, Prometheus, Helm, Istio, Envoy, Argo CD, GitOps, Dash0, Gitar, Sonar, "
     "observability, platform engineering, SRE, LLM, keynote, breakout session."
 )

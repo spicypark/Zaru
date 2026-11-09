@@ -46,6 +46,11 @@ export class HearSocket {
     if (this.isReady) this.ws!.send(JSON.stringify({ type: "speech_start", turn }));
   }
 
+  /** Finalise audio streamed outside any turn (continuous mode); not counted as a turn. */
+  sendIdleCommit(): void {
+    if (this.isReady) this.ws!.send(JSON.stringify({ type: "commit" }));
+  }
+
   /** End of a spoken turn; `turn` comes back on that turn's captions. */
   sendCommit(turn: number, attributed: boolean): void {
     if (this.isReady) this.ws!.send(JSON.stringify({ type: "commit", turn, attributed }));

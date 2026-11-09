@@ -46,9 +46,15 @@ export function SeeScreen() {
   // Confirm pause/resume out loud. This effect is declared after useNarration, so it runs after
   // the narration cleanup (which silences speech) instead of being cut off by it.
   const announcedRef = useRef(false);
+  // The very first start already said "Starting Zaru See"; don't cut it off with "Narration on".
+  const skipNextAnnounceRef = useRef(false);
   useEffect(() => {
     if (!announcedRef.current) {
       announcedRef.current = true;
+      return;
+    }
+    if (skipNextAnnounceRef.current) {
+      skipNextAnnounceRef.current = false;
       return;
     }
     trackEvent("zaru.see.narration", { state: running ? "resumed" : "paused" });
@@ -77,6 +83,7 @@ export function SeeScreen() {
     setAudioCtx(createAudioContext());
     const result = await start();
     if (result.ok) {
+      skipNextAnnounceRef.current = true;
       setRunning(true);
     } else {
       speaker.say(result.message, { interrupt: true });
