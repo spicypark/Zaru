@@ -392,20 +392,46 @@ main.live {
 }
 
 /* See mode: the camera is the screen; one big Start/Pause toggle */
-.see-toggle {
+/* Bottom controls: Pause/Start above a large "Ask a question" (about a third of the screen). */
+.see-bottom {
   position: absolute;
   left: 16px;
   right: 16px;
   bottom: calc(16px + var(--safe-bottom));
-  height: 22vh;
-  min-height: 120px;
+  display: grid;
+  gap: 12px;
+}
+
+.see-toggle {
+  height: 12vh;
+  min-height: 72px;
   border: 0;
   border-radius: var(--radius);
   background: var(--see);
   color: var(--ink);
-  font-size: 2.4rem;
+  font-size: 1.8rem;
   font-weight: 800;
   opacity: 0.95;
+}
+
+.see-ask {
+  height: 33vh;
+  min-height: 160px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--text);
+  color: var(--ink);
+  font-size: 2.2rem;
+  font-weight: 800;
+  opacity: 0.95;
+}
+
+.see-ask.ask-listening {
+  background: var(--danger);
+}
+
+.see-ask:disabled {
+  opacity: 0.7;
 }
 
 .see-toggle.running {
