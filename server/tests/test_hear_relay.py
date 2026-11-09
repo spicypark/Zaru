@@ -100,10 +100,20 @@ def test_relays_audio_and_returns_captions(fake_openai: FakeOpenAI, tmp_path: Pa
         assert ws.receive_json() == {"type": "ready", "backend": "openai"}
         ws.send_text(json.dumps({"type": "speech_start"}))
         ws.send_bytes(pcm)
-        ws.send_text(json.dumps({"type": "commit"}))
-        assert ws.receive_json() == {"type": "delta", "item": "item_1", "text": "hello "}
-        assert ws.receive_json() == {"type": "delta", "item": "item_1", "text": "world"}
-        assert ws.receive_json() == {"type": "final", "item": "item_1", "text": "hello world"}
+        ws.send_text(json.dumps({"type": "commit", "turn": 7, "attributed": True}))
+        assert ws.receive_json() == {
+            "type": "delta",
+            "item": "item_1",
+            "turn": 7,
+            "text": "hello ",
+        }
+        assert ws.receive_json() == {"type": "delta", "item": "item_1", "turn": 7, "text": "world"}
+        assert ws.receive_json() == {
+            "type": "final",
+            "item": "item_1",
+            "turn": 7,
+            "text": "hello world",
+        }
 
     types = [e["type"] for e in fake_openai.received]
     assert types == ["session.update", "input_audio_buffer.append", "input_audio_buffer.commit"]
@@ -144,10 +154,10 @@ def local_stt(monkeypatch: pytest.MonkeyPatch) -> FakeTranscriber:
     return fake
 
 
-def speak_one_turn(ws) -> None:
+def speak_one_turn(ws, turn: int = 1) -> None:
     ws.send_text(json.dumps({"type": "speech_start"}))
     ws.send_bytes(b"\x01\x00" * 2400)
-    ws.send_text(json.dumps({"type": "commit"}))
+    ws.send_text(json.dumps({"type": "commit", "turn": turn}))
 
 
 def test_uses_local_model_without_api_key(
@@ -156,7 +166,12 @@ def test_uses_local_model_without_api_key(
     with client_for(fake_openai, tmp_path, key="").websocket_connect("/ws/hear") as ws:
         assert ws.receive_json() == {"type": "ready", "backend": "local"}
         speak_one_turn(ws)
-        assert ws.receive_json() == {"type": "final", "item": "local_1", "text": "local words"}
+        assert ws.receive_json() == {
+            "type": "final",
+            "item": "local_1",
+            "turn": 1,
+            "text": "local words",
+        }
     assert local_stt.calls == [b"\x01\x00" * 2400]
     assert fake_openai.received == []
 
@@ -222,8 +237,9 @@ def test_local_passes_previous_caption_as_context(
 ) -> None:
     with client_for(fake_openai, tmp_path, key="").websocket_connect("/ws/hear") as ws:
         assert ws.receive_json()["backend"] == "local"
-        speak_one_turn(ws)
-        assert ws.receive_json()["item"] == "local_1"
-        speak_one_turn(ws)
-        assert ws.receive_json()["item"] == "local_2"
+        speak_one_turn(ws, turn=1)
+        assert ws.receive_json()["turn"] == 1
+        speak_one_turn(ws, turn=2)
+        second = ws.receive_json()
+        assert (second["item"], second["turn"]) == ("local_2", 2)
     assert local_stt.contexts == ["", "local words"]

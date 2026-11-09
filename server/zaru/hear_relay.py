@@ -3,11 +3,16 @@
 Client -> server over /ws/hear:
   - binary frames: mono PCM16 little-endian at 24 kHz (~100 ms each)
   - text frames (JSON): {"type": "speech_start"} when the phone's voice detector hears speech,
-    {"type": "commit"} at the end of a spoken turn (pause, or a cap on long turns)
+    {"type": "commit", "turn": n, "attributed": bool} at the end of a spoken turn (pause, or a
+    cap on long turns). `turn` is the phone's turn number, echoed on that turn's captions so the
+    phone can put them in the right speaker's bubble; `attributed` says whether the phone matched
+    the turn to a face (counted, nothing else).
 
 Server -> client (JSON):
-  {"type": "ready", "backend": "openai" | "local"} | {"type": "delta", "item": id, "text": str}
-  | {"type": "final", "item": id, "text": str} | {"type": "failed", "item": id}
+  {"type": "ready", "backend": "openai" | "local"}
+  | {"type": "delta", "item": id, "turn": n | null, "text": str}
+  | {"type": "final", "item": id, "turn": n | null, "text": str}
+  | {"type": "failed", "item": id, "turn": n | null}
   | {"type": "error", "code": str}
 
 Backends: OpenAI realtime transcription when a key is configured and reachable; otherwise
@@ -60,6 +65,10 @@ active_sessions = meter.create_up_down_counter(
 audio_seconds = meter.create_counter(
     "zaru.hear.audio_seconds", unit="s", description="Audio streamed to transcription"
 )
+speaker_attribution = meter.create_counter(
+    "zaru.speaker.attribution",
+    description="Spoken turns the phone matched to a face (bubble) or not (caption bar)",
+)
 segments = meter.create_counter(
     "zaru.hear.segments", description="Spoken turns transcribed, by outcome"
 )
@@ -81,17 +90,29 @@ def session_update(model: str) -> dict:
     }
 
 
+def _commit_turn(control: dict) -> int | None:
+    """Turn number from a commit control message; records the phone's attribution result."""
+    if "attributed" in control:
+        result = "face" if control.get("attributed") else "caption_bar"
+        speaker_attribution.add(1, {"result": result})
+    turn = control.get("turn")
+    return turn if isinstance(turn, int) else None
+
+
 class _Turns:
     """Matches commits to OpenAI items (commits are acknowledged in order) to time captions."""
 
     def __init__(self) -> None:
-        self.pending_commits: deque[float] = deque()
+        self.pending_commits: deque[tuple[float, int | None]] = deque()
         self.commit_time: dict[str, float] = {}
+        self.turn_of: dict[str, int | None] = {}
         self.has_text: set[str] = set()
 
     def committed(self, item_id: str) -> None:
         if self.pending_commits:
-            self.commit_time[item_id] = self.pending_commits.popleft()
+            committed_at, turn = self.pending_commits.popleft()
+            self.commit_time[item_id] = committed_at
+            self.turn_of[item_id] = turn
 
     def first_text(self, item_id: str) -> None:
         if item_id in self.has_text:
@@ -107,6 +128,7 @@ class _Turns:
                 final_latency.record((time.monotonic() - t) * 1000, _OPENAI)
         self.commit_time.pop(item_id, None)
         self.has_text.discard(item_id)
+        # turn_of is kept until the final message is sent; see _openai_to_phone.
         segments.add(1, {**_OPENAI, "outcome": outcome})
 
 
@@ -129,8 +151,11 @@ async def _phone_to_openai(ws: WebSocket, upstream: ClientConnection, turns: _Tu
             control = json.loads(msg.get("text") or "{}")
         except json.JSONDecodeError:
             continue
-        if control.get("type") == "commit" and uncommitted >= MIN_COMMIT_BYTES:
-            turns.pending_commits.append(time.monotonic())
+        if control.get("type") != "commit":
+            continue
+        turn = _commit_turn(control)
+        if uncommitted >= MIN_COMMIT_BYTES:
+            turns.pending_commits.append((time.monotonic(), turn))
             uncommitted = 0
             await upstream.send(json.dumps({"type": "input_audio_buffer.commit"}))
 
@@ -144,13 +169,29 @@ async def _openai_to_phone(ws: WebSocket, upstream: ClientConnection, turns: _Tu
             turns.committed(item)
         elif kind == "conversation.item.input_audio_transcription.delta":
             turns.first_text(item)
-            await ws.send_json({"type": "delta", "item": item, "text": event.get("delta", "")})
+            await ws.send_json(
+                {
+                    "type": "delta",
+                    "item": item,
+                    "turn": turns.turn_of.get(item),
+                    "text": event.get("delta", ""),
+                }
+            )
         elif kind == "conversation.item.input_audio_transcription.completed":
             turns.finished(item, "ok")
-            await ws.send_json({"type": "final", "item": item, "text": event.get("transcript", "")})
+            await ws.send_json(
+                {
+                    "type": "final",
+                    "item": item,
+                    "turn": turns.turn_of.pop(item, None),
+                    "text": event.get("transcript", ""),
+                }
+            )
         elif kind == "conversation.item.input_audio_transcription.failed":
             turns.finished(item, "failed")
-            await ws.send_json({"type": "failed", "item": item})
+            await ws.send_json(
+                {"type": "failed", "item": item, "turn": turns.turn_of.pop(item, None)}
+            )
         elif kind == "error":
             # Log the error code/type only; messages can echo request content.
             err = event.get("error") or {}
@@ -230,12 +271,12 @@ MAX_LOCAL_QUEUE_AGE_S = 5.0
 async def _local_session(ws: WebSocket, transcriber: Transcriber) -> None:
     await ws.send_json({"type": "ready", "backend": "local"})
     attrs = {"backend": "local"}
-    queue: asyncio.Queue[tuple[str, bytes, float]] = asyncio.Queue()
+    queue: asyncio.Queue[tuple[str, int | None, bytes, float]] = asyncio.Queue()
 
     async def worker() -> None:
         previous = ""
         while True:
-            item, pcm, committed_at = await queue.get()
+            item, turn, pcm, committed_at = await queue.get()
             # The local model is shared by every phone; a caption this late is no use to a
             # deaf reader, so skip it rather than falling further behind real time.
             # The deadline is checked again inside the transcriber, after the shared model
@@ -261,17 +302,17 @@ async def _local_session(ws: WebSocket, transcriber: Transcriber) -> None:
             final_latency.record(elapsed, attrs)
             segments.add(1, {**attrs, "outcome": "ok"})
             previous = text
-            await ws.send_json({"type": "final", "item": item, "text": text})
+            await ws.send_json({"type": "final", "item": item, "turn": turn, "text": text})
 
     worker_task = asyncio.create_task(worker())
     buffer = bytearray()
     count = 0
 
-    def commit() -> None:
+    def commit(turn: int | None = None) -> None:
         nonlocal count
         if len(buffer) >= MIN_COMMIT_BYTES:
             count += 1
-            queue.put_nowait((f"local_{count}", bytes(buffer), time.monotonic()))
+            queue.put_nowait((f"local_{count}", turn, bytes(buffer), time.monotonic()))
         buffer.clear()
 
     try:
@@ -290,7 +331,7 @@ async def _local_session(ws: WebSocket, transcriber: Transcriber) -> None:
             except json.JSONDecodeError:
                 continue
             if control.get("type") == "commit":
-                commit()
+                commit(_commit_turn(control))
     finally:
         worker_task.cancel()
         await asyncio.gather(worker_task, return_exceptions=True)
