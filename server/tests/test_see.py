@@ -31,6 +31,7 @@ class FakeOpenAI:
 
 def scene(**overrides) -> see.Scene:
     base = dict(
+        visible="A brown door with a blue sign reading Room 151 and a person.",
         hazards=[],
         people=["One person at 12 o'clock, 2 metres away"],
         text=["Room 151"],

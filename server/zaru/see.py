@@ -42,41 +42,61 @@ announcements = meter.create_counter(
     "zaru.see.announcements", description="What the model chose to announce, by priority"
 )
 
-SYSTEM_PROMPT = """You are Zaru See, the eyes of a blind attendee at a tech conference, looking \
-through their phone's back camera held in front of them. Your words are read aloud, so:
-- Be brief and concrete. No preamble, no "I see", no "the image shows".
-- Give directions as clock positions from the user. The camera points at 12 o'clock, so \
-everything in the frame is in front of them: left edge of the image = 10 o'clock, centre = 12, \
-right edge = 2. Never use 3 to 9 o'clock. Add rough distance in steps or metres (lower in the \
-frame = closer).
-- Priority: hazards (steps, stairs, obstacles at body or head height, wet floor, doors \
-swinging, cables, low tables) > people (how many, where, approaching or not, what they're \
-doing) > readable text (room signs, slide titles, badges, arrows: quote it exactly) > the \
-general scene.
-- Never guess names or identities from faces; you may read a visible name badge.
-- If you're not sure something is there, don't say it."""
+# Grounding matters more than anything else here: a blind user can't check the answer. Earlier
+# prompts that named a setting ("a tech conference") and listed example hazards and signs made
+# the model invent exactly those (people, room signs, wet-floor signs) on featureless frames such
+# as a close-up of a table. So: no assumed setting, no example objects, and the model must first
+# write down literally what is in the frame before deciding what to say.
+SYSTEM_PROMPT = """You describe live camera frames for a blind person. The phone's back camera \
+is held in front of them. Your `speak` text is read aloud to them.
+
+Accuracy rules (most important):
+- Describe ONLY what is clearly visible in this exact photo. Never assume a setting, an event or \
+objects that aren't plainly shown.
+- Never invent people, signs, text, screens or hazards. Only quote text you can actually read in \
+the photo, exactly as written.
+- Many frames are ordinary or close-up: a table top, a wall, the floor, a hand, a blurry or dark \
+view. Say exactly that, plainly (for example, that the camera is pointed at a surface up close). \
+That is a correct and useful answer.
+- If the photo is too dark or blurry to tell, say so and suggest moving the camera.
+- Never identify people by face; you may read a visible name badge.
+
+Style: brief and concrete, no preamble ("I see", "the image shows"). Directions are clock \
+positions from the user: the camera points at 12 o'clock, the left edge of the frame is 10 and \
+the right edge is 2 (never 3 to 9). Lower in the frame means closer. Order: hazards, then people, \
+then readable text, then everything else."""
 
 AUTO_INSTRUCTIONS = """This frame was captured automatically because the camera view changed. \
 The last thing you told the user was: "{previous}".
-Set changed to true ONLY for something the user would want to be interrupted for: a new hazard, \
-a person appearing, approaching or leaving, new readable text (a sign, slide or badge), or \
-arriving somewhere different. Changes in pose, gesture, expression, clothing details, lighting or \
-camera angle are NOT changes. When in doubt, changed is false and speak is empty.
+Set changed to true only if this photo clearly shows something new the user would want to be \
+interrupted for: an obstacle or drop in their path, a person, readable text, or a different \
+place. Ordinary surfaces, close-ups, blur, pose, lighting or camera angle are not worth \
+interrupting for. When in doubt, changed is false and speak is empty.
 If changed, `speak` is at most 2 short sentences about only the new thing."""
 
-DESCRIBE_INSTRUCTIONS = """The user asked: "Describe what's around me." Give a complete but \
-brief description: `speak` is at most 3 short sentences, most important first. changed is true."""
+DESCRIBE_INSTRUCTIONS = """The user asked: "Describe what's around me." Describe what this photo \
+actually shows, in at most 3 short sentences, most important first. changed is true."""
 
-ASK_INSTRUCTIONS = """The user asked about this view: "{question}". Answer the question directly \
-in `speak`, at most 3 short sentences. If the answer isn't visible, say so plainly and suggest \
-where to point the camera. changed is true."""
+ASK_INSTRUCTIONS = """The user asked about this view: "{question}". Answer from what is visible \
+in this photo only, in at most 3 short sentences. If the answer isn't visible, say so plainly \
+and suggest where to point the camera. changed is true."""
 
 
 class Scene(BaseModel):
-    hazards: list[str] = Field(description="Hazards with clock direction and distance")
-    people: list[str] = Field(description="People with clock direction, distance and activity")
-    text: list[str] = Field(description="Readable text, quoted exactly")
-    scene: str = Field(description="One-sentence summary of the whole view, for memory")
+    # Field order is deliberate: the literal inventory comes first, so the later fields (and what
+    # gets spoken) are conditioned on what was actually observed.
+    visible: str = Field(
+        description="Literal, plain inventory of what is in this photo and nothing else"
+    )
+    hazards: list[str] = Field(
+        description="Obstacles or drops clearly visible in the user's path, with clock direction "
+        "and distance; empty if none"
+    )
+    people: list[str] = Field(
+        description="People clearly visible, with clock direction and distance; empty if none"
+    )
+    text: list[str] = Field(description="Text legible in the photo, quoted exactly; empty if none")
+    scene: str = Field(description="One-sentence summary of this view, for memory")
     changed: bool
     priority: Literal["hazard", "people", "text", "scene", "none"]
     speak: str = Field(description="What to say aloud, following the length limit")
@@ -128,9 +148,8 @@ def get_openai(settings: Settings) -> AsyncOpenAI:
 async def describe_scene(
     client: AsyncOpenAI, settings: Settings, jpeg: bytes, instructions: str, mode: str
 ) -> Scene:
-    # Automatic checks use the fast low-detail image; the user's own requests get full detail
-    # so small text is readable.
-    detail = "low" if mode == "auto" else "auto"
+    # Full detail for every request: low-detail images measurably increased invented details.
+    detail = "auto"
     image_url = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()
     with tracer.start_as_current_span("zaru.vision.describe") as span:
         span.set_attribute("zaru.see.mode", mode)
@@ -150,6 +169,7 @@ async def describe_scene(
                 }
             ],
             text_format=Scene,
+            temperature=0,
         )
         vision_latency.record((time.monotonic() - started) * 1000, {"mode": mode})
         scene = response.output_parsed
