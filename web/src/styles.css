@@ -454,7 +454,8 @@ main.live {
 }
 
 .priority-hazard { --card-color: var(--danger); }
-.priority-people { --card-color: var(--hear); }
+/* Its own hue: --hear now equals --text, which would make people and scene flashes identical. */
+.priority-people { --card-color: #6ea8fe; }
 .priority-approach { --card-color: #f72585; }
 .priority-text { --card-color: var(--see); }
 .priority-scene { --card-color: var(--text); }
