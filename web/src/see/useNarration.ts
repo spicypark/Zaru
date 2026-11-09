@@ -140,7 +140,11 @@ export function useNarration({ running, video, ctx, mirrored, speaker, onFrozen 
 
       // Frozen camera: the video has stopped delivering new frames. (Comparing pixels is not a
       // safe signal: a still scene with heavy noise reduction can give identical thumbnails.)
-      if (now - lastFrameAt > FROZEN_MS) {
+      // Hidden pages render no frames (and can't reopen the camera on iOS), so only judge
+      // freezes while visible; the media hook reopens a dead camera on return.
+      if (document.visibilityState !== "visible") {
+        lastFrameAt = now;
+      } else if (now - lastFrameAt > FROZEN_MS) {
         lastFrameAt = now; // give the restart time before checking again
         onFrozenRef.current();
       }
