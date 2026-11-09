@@ -27,10 +27,10 @@ Built at the WeMakeDevs Cloud Native Hackathon (Salt Lake City, Nov 9 2026).
 - Runs in the browser on iPhone (add it to the home screen) and on laptops (webcam and mic). Nothing to install from an app store. The MediaPipe models and WASM runtime are served by the app itself, so there's no CDN dependency.
 - **Privacy:** no audio, video frames or transcripts are stored or logged. Telemetry contains only timings, counts and fixed labels.
 
-## Open Zaru See quickly (iPhone)
+## Recommended way to run Zaru (iPhone)
 
-1. In Safari, open `https://zaru.jerryzheng.dev/see/`, then Share → **Add to Home Screen**. This creates a **Zaru See** icon that opens straight into See mode. Do the same with `/hear/` for **Zaru Hear**.
-2. For hands-free launch, open the Shortcuts app → **+** → *Open URLs* → `https://zaru.jerryzheng.dev/see/`, then name the shortcut **Zaru**.
+1. In Safari, open `https://zaru.jerryzheng.dev/`, then Share → **Add to Home Screen**. This creates a **Zaru** icon that opens into the mode select, either See or Hear.
+2. For hands-free launch, open the Shortcuts app → **+** → *Open URLs* → `https://zaru.jerryzheng.dev/`, then name the shortcut **Zaru**.
    - Say **"Hey Siri, Zaru"**, or
    - Go to Settings → Accessibility → Touch → **Back Tap** → Triple Tap → *Zaru* to launch it by tapping the back of the phone.
 
