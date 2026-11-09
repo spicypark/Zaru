@@ -126,3 +126,14 @@ def test_update_mode_always_speaks_and_reports_change(
     assert body["speak"] == "Still facing a wooden table."
     assert body["changed"] is False
     assert "running narration" in fake.calls[0]["input"][0]["content"][0]["text"]
+
+
+def test_update_reminder_uses_short_reminder_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeOpenAI(scene(changed=False, priority="scene", speak="Still a door ahead."))
+    client_with(fake, tmp_path, monkeypatch).post(
+        "/api/see/describe",
+        json={"image": JPEG, "mode": "update", "previous": "A door ahead.", "reason": "reminder"},
+    )
+    assert "hasn't heard anything for a while" in fake.calls[0]["input"][0]["content"][0]["text"]

@@ -19,9 +19,27 @@ const WALKING_MS = 2500;
 const MIN_GAP_BIG_MS = 2500;
 const MIN_GAP_MODERATE_MS = 6000;
 // When nothing changes, reminders back off from 8 s up to 40 s, and reset on any change.
-const QUIET_START_MS = 8000;
-const QUIET_MAX_MS = 40000;
-const QUIET_GROWTH = 1.6;
+// Reminders only after this much silence, growing up to the max while nothing changes.
+const QUIET_START_MS = 20000;
+const QUIET_MAX_MS = 60000;
+const QUIET_GROWTH = 1.5;
+// How many recent spoken lines the model sees, so it doesn't repeat itself.
+const HISTORY_LINES = 4;
+// Safety net: skip a non-urgent line this similar (word overlap) to something said recently.
+const REPEAT_SIMILARITY = 0.6;
+
+const words = (text: string) =>
+  new Set(text.toLowerCase().replace(/[^a-z0-9' ]/g, " ").split(/\s+/).filter((w) => w.length > 2));
+
+/** Word-overlap similarity (0..1) between two sentences. */
+function similarity(a: string, b: string): number {
+  const wa = words(a);
+  const wb = words(b);
+  if (!wa.size || !wb.size) return 0;
+  let shared = 0;
+  for (const w of wa) if (wb.has(w)) shared += 1;
+  return shared / Math.min(wa.size, wb.size);
+}
 // A camera that delivers no new frames for this long has frozen.
 const FROZEN_MS = 3000;
 // Person detector cadence and the minimum gap between approach alerts.
@@ -67,8 +85,10 @@ export function useNarration({ running, video, ctx, mirrored, speaker, onFrozen 
     let inFlight = false;
     let previousThumb: Float32Array | null = null;
     let lastSentThumb: Float32Array | null = null;
-    let lastSummary = "";
+    // What Zaru actually said recently (oldest first); sent to the model so it won't repeat.
+    const history: string[] = [];
     let lastUpdateAt = 0;
+    let lastSpokenAt = performance.now();
     let quietInterval = QUIET_START_MS;
     let settledTicks = 0;
     let movingSince = 0;
@@ -103,15 +123,27 @@ export function useNarration({ running, video, ctx, mirrored, speaker, onFrozen 
       lastSentThumb = thumb;
       setStatus("looking");
       try {
-        const result = await describe(image, "update", lastSummary, reason);
+        const recent = history.join(" | ");
+        const result = await describe(image, "update", recent, reason);
         if (stopped) return;
-        if (result.scene) lastSummary = result.scene;
-        // Something new: keep updates frequent. Same as before: space reminders out further.
+        // Something new: reminders stay at the base interval. Nothing new: space them further.
         quietInterval = result.changed
           ? QUIET_START_MS
           : Math.min(QUIET_MAX_MS, quietInterval * QUIET_GROWTH);
-        if (result.speak) {
-          const urgent = result.priority === "hazard";
+        const urgent = result.priority === "hazard";
+        // Reminders are deliberate "Still …" repeats, so they skip the near-repeat filter. Either
+        // way a reminder request restarts the quiet clock, so a still scene can't trigger a new
+        // vision call every few seconds.
+        const reminder = reason === "reminder";
+        if (reminder) lastSpokenAt = performance.now();
+        const repeated =
+          !urgent &&
+          !reminder &&
+          history.some((line) => similarity(line, result.speak) >= REPEAT_SIMILARITY);
+        if (result.speak && !repeated) {
+          history.push(result.speak);
+          if (history.length > HISTORY_LINES) history.shift();
+          lastSpokenAt = performance.now();
           if (urgent) earcons?.hazard();
           speaker.say(result.speak, { interrupt: urgent });
           pulseIdRef.current += 1;
@@ -178,7 +210,11 @@ export function useNarration({ running, video, ctx, mirrored, speaker, onFrozen 
         sinceLast > MIN_GAP_MODERATE_MS
       ) {
         void narrate(thumb, "change");
-      } else if (!speaking && sinceLast > quietInterval) {
+      } else if (
+        !speaking &&
+        now - lastSpokenAt > quietInterval &&
+        sinceLast > MIN_GAP_MODERATE_MS
+      ) {
         void narrate(thumb, "reminder");
       }
     };
