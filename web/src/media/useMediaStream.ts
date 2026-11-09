@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { trackEvent, type CameraRestartReason } from "../telemetry";
 
 export type Facing = "environment" | "user";
 
@@ -65,7 +66,10 @@ async function countCameras(): Promise<number> {
  * the camera on interruptions (calls, Control Center, screen lock, backgrounding, another app
  * taking the camera, thermal limits). Returns a function that stops watching.
  */
-function watchTrack(track: MediaStreamTrack, onDead: (reason: string) => void): () => void {
+function watchTrack(
+  track: MediaStreamTrack,
+  onDead: (reason: CameraRestartReason) => void,
+): () => void {
   let muteTimer: number | undefined;
   const onEnded = () => onDead("ended");
   const onMute = () => {
@@ -99,7 +103,7 @@ export function useMediaStream(withAudio: boolean) {
   // immediately rather than stored, or the camera light stays on.
   const mountedRef = useRef(true);
   // Set below; lets the track watcher call the latest restart function.
-  const restartRef = useRef<(reason: string) => void>(() => {});
+  const restartRef = useRef<(reason: CameraRestartReason) => void>(() => {});
 
   const stop = useCallback(() => {
     unwatchRef.current?.();
@@ -171,33 +175,46 @@ export function useMediaStream(withAudio: boolean) {
   }, []);
 
   /** Reopen the current camera (same direction) after it froze, ended or was interrupted. */
-  const restartVideo = useCallback(async () => {
-    const audioStream = audioStreamRef.current;
-    if (!audioStream || switchingRef.current || !mountedRef.current) return;
-    switchingRef.current = true;
-    try {
-      releaseVideo();
-      let track: MediaStreamTrack | null = null;
-      for (const delay of RESTART_DELAYS_MS) {
-        await new Promise((r) => window.setTimeout(r, delay));
+  const restartVideo = useCallback(
+    async (reason: CameraRestartReason) => {
+      const audioStream = audioStreamRef.current;
+      if (!audioStream || switchingRef.current || !mountedRef.current) return;
+      switchingRef.current = true;
+      const startedAt = performance.now();
+      const report = (outcome: "ok" | "failed") =>
+        trackEvent("zaru.camera.restart", {
+          mode: withAudio ? "hear" : "see",
+          reason,
+          outcome,
+          duration_ms: performance.now() - startedAt,
+        });
+      try {
+        releaseVideo();
+        let track: MediaStreamTrack | null = null;
+        for (const delay of RESTART_DELAYS_MS) {
+          await new Promise((r) => window.setTimeout(r, delay));
+          if (!mountedRef.current) return;
+          track = await openCamera(facingRef.current, false);
+          if (track) break;
+        }
         if (!mountedRef.current) return;
-        track = await openCamera(facingRef.current, false);
-        if (track) break;
+        if (!track) {
+          report("failed");
+          stop();
+          setState({ status: "error", message: "The camera stopped. Tap to start again." });
+          return;
+        }
+        await adopt(track, audioStream);
+        report("ok");
+      } finally {
+        switchingRef.current = false;
       }
-      if (!mountedRef.current) return;
-      if (!track) {
-        stop();
-        setState({ status: "error", message: "The camera stopped. Tap to start again." });
-        return;
-      }
-      await adopt(track, audioStream);
-    } finally {
-      switchingRef.current = false;
-    }
-  }, [openCamera, adopt, releaseVideo, stop]);
+    },
+    [withAudio, openCamera, adopt, releaseVideo, stop],
+  );
 
   useEffect(() => {
-    restartRef.current = () => void restartVideo();
+    restartRef.current = (reason) => void restartVideo(reason);
   }, [restartVideo]);
 
   // Coming back to the app: if the camera died while hidden, reopen it.
@@ -205,7 +222,7 @@ export function useMediaStream(withAudio: boolean) {
     const onVisible = () => {
       if (document.visibilityState !== "visible" || !audioStreamRef.current) return;
       const track = videoTrackRef.current;
-      if (!track || track.readyState === "ended" || track.muted) void restartVideo();
+      if (!track || track.readyState === "ended" || track.muted) void restartVideo("visible");
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);

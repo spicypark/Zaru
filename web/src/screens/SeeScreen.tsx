@@ -5,6 +5,7 @@ import { useMediaStream } from "../media/useMediaStream";
 import { keepScreenOn } from "../media/wakeLock";
 import { goToPicker } from "../modes";
 import { Speaker } from "../see/speech";
+import { trackEvent } from "../telemetry";
 import { useNarration, type NarrationStatus } from "../see/useNarration";
 
 const STATUS_LABEL: Record<NarrationStatus, string> = {
@@ -25,7 +26,7 @@ export function SeeScreen() {
   const [showSettings, setShowSettings] = useState(false);
   const live = state.status === "live";
 
-  const onFrozen = useCallback(() => void restartVideo(), [restartVideo]);
+  const onFrozen = useCallback(() => void restartVideo("frozen"), [restartVideo]);
   const { status, pulse } = useNarration({
     running: live && running,
     video: live ? video : null,
@@ -50,6 +51,7 @@ export function SeeScreen() {
       announcedRef.current = true;
       return;
     }
+    trackEvent("zaru.see.narration", { state: running ? "resumed" : "paused" });
     speaker.say(running ? "Narration on." : "Paused.", { interrupt: true });
   }, [running, speaker]);
 

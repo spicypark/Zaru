@@ -39,7 +39,11 @@ export class Speaker {
     return this.available && (this.live.size > 0 || window.speechSynthesis.speaking);
   }
 
-  say(text: string, { interrupt = false }: { interrupt?: boolean } = {}): void {
+  /** `onStart` fires when the device actually begins speaking this message (if it does). */
+  say(
+    text: string,
+    { interrupt = false, onStart }: { interrupt?: boolean; onStart?: () => void } = {},
+  ): void {
     if (!this.available || !text.trim()) return;
     const synth = window.speechSynthesis;
     if (interrupt || this.live.size > 0) {
@@ -54,6 +58,7 @@ export class Speaker {
       this.live.delete(utterance);
       if (this.live.size === 0) window.clearInterval(this.keepAlive);
     };
+    if (onStart) utterance.onstart = onStart;
     utterance.onend = done;
     utterance.onerror = done;
     this.live.add(utterance);
