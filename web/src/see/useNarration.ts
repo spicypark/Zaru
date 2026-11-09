@@ -131,8 +131,15 @@ export function useNarration({ running, video, ctx, mirrored, speaker, onFrozen 
           ? QUIET_START_MS
           : Math.min(QUIET_MAX_MS, quietInterval * QUIET_GROWTH);
         const urgent = result.priority === "hazard";
+        // Reminders are deliberate "Still …" repeats, so they skip the near-repeat filter. Either
+        // way a reminder request restarts the quiet clock, so a still scene can't trigger a new
+        // vision call every few seconds.
+        const reminder = reason === "reminder";
+        if (reminder) lastSpokenAt = performance.now();
         const repeated =
-          !urgent && history.some((line) => similarity(line, result.speak) >= REPEAT_SIMILARITY);
+          !urgent &&
+          !reminder &&
+          history.some((line) => similarity(line, result.speak) >= REPEAT_SIMILARITY);
         if (result.speak && !repeated) {
           history.push(result.speak);
           if (history.length > HISTORY_LINES) history.shift();
