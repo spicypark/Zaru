@@ -21,9 +21,16 @@ ENV UV_COMPILE_BYTECODE=1 \
     PYTHONUNBUFFERED=1
 COPY server/pyproject.toml server/uv.lock server/.python-version ./
 RUN uv sync --frozen --no-dev
+ENV PATH="/app/.venv/bin:$PATH"
+# Bake the local caption fallback model into the image so it works without network or an
+# OpenAI key, and so the first caption isn't delayed by a download.
+ARG LOCAL_WHISPER_MODEL=base.en
+RUN python -c "from faster_whisper import WhisperModel; WhisperModel('${LOCAL_WHISPER_MODEL}', device='cpu', compute_type='int8', download_root='/app/models')"
 COPY server/zaru ./zaru
 COPY --from=web /web/dist ./static
 ENV STATIC_DIR=/app/static \
-    PATH="/app/.venv/bin:$PATH"
+    WHISPER_MODEL_DIR=/app/models \
+    LOCAL_WHISPER_MODEL=${LOCAL_WHISPER_MODEL} \
+    HF_HUB_OFFLINE=1
 EXPOSE 8000
 CMD ["sh", "-c", "exec uvicorn zaru.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]
