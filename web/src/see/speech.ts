@@ -25,10 +25,16 @@ const CANCEL_SETTLE_MS = 250;
 // treat the utterance as finished once it has clearly stopped.
 const POLL_MS = 300;
 const MIN_SPEAK_MS = 800;
+// A message that stops within this fraction of its expected duration was cut off (iOS audio route
+// changes do this), not finished: it is said once more. Messages shorter than RETRY_MIN_CHARS
+// are left alone, since their timing is too unreliable to judge.
+const CUT_OFF_FRACTION = 0.35;
+const RETRY_MIN_CHARS = 20;
+const MS_PER_CHAR = 55;
 // Safety net: no single message of ours takes longer than this to say.
 const MAX_SPEAK_MS = 20000;
 
-type Message = { text: string; onStart?: () => void };
+type Message = { text: string; onStart?: () => void; retried?: boolean };
 
 /**
  * Zaru's voice. Uses speechSynthesis (not aria-live), so it never talks over VoiceOver's own
@@ -47,7 +53,11 @@ export class Speaker {
   // Safari stops speaking mid-sentence if the utterance object is garbage-collected, so keep a
   // reference to the one playing until it finishes.
   private current: SpeechSynthesisUtterance | null = null;
+  private currentMessage: Message | null = null;
   private currentStartedAt = 0;
+  // Last time the engine was seen speaking the current message (judges cut-offs accurately even
+  // when the stop is only noticed by the next poll).
+  private lastSpeakingAt = 0;
   private pending: Message | null = null;
   private lastCancelAt = 0;
   private startTimer: number | undefined;
@@ -122,17 +132,20 @@ export class Speaker {
     }, wait);
   }
 
-  private speakNow({ text, onStart }: Message): void {
+  private speakNow(message: Message): void {
+    const { text, onStart } = message;
     const synth = window.speechSynthesis;
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = this.rate;
     utterance.lang = "en-US";
     if (onStart) utterance.onstart = onStart;
-    const finish = () => this.finish(utterance);
-    utterance.onend = finish;
-    utterance.onerror = finish;
+    const finish = (endedAt = performance.now()) => this.finish(utterance, endedAt);
+    utterance.onend = () => finish();
+    utterance.onerror = () => finish();
     this.current = utterance;
+    this.currentMessage = message;
     this.currentStartedAt = performance.now();
+    this.lastSpeakingAt = this.currentStartedAt;
 
     // iOS can leave the engine paused after an interruption, which silently swallows speech.
     if (synth.paused) synth.resume();
@@ -141,16 +154,34 @@ export class Speaker {
     window.clearInterval(this.pollTimer);
     this.pollTimer = window.setInterval(() => {
       if (this.current !== utterance) return;
-      const elapsed = performance.now() - this.currentStartedAt;
+      const now = performance.now();
+      if (synth.speaking) this.lastSpeakingAt = now;
+      const elapsed = now - this.currentStartedAt;
       const stopped = !synth.speaking && !synth.pending;
-      if ((stopped && elapsed > MIN_SPEAK_MS) || elapsed > MAX_SPEAK_MS) finish();
+      if (stopped && elapsed > MIN_SPEAK_MS) finish(this.lastSpeakingAt);
+      else if (elapsed > MAX_SPEAK_MS) finish();
     }, POLL_MS);
   }
 
-  private finish(utterance: SpeechSynthesisUtterance): void {
+  private finish(utterance: SpeechSynthesisUtterance, endedAt: number): void {
     if (this.current !== utterance) return;
     this.current = null;
     window.clearInterval(this.pollTimer);
+    const message = this.currentMessage;
+    this.currentMessage = null;
+    const elapsed = endedAt - this.currentStartedAt;
+    const expected = ((message?.text.length ?? 0) * MS_PER_CHAR) / this.rate;
+    const cutOff =
+      message &&
+      !message.retried &&
+      message.text.length >= RETRY_MIN_CHARS &&
+      elapsed < expected * CUT_OFF_FRACTION;
+    if (cutOff) {
+      // Treat it like a cancel: wait for the audio route to settle, then say it once more.
+      this.lastCancelAt = performance.now();
+      this.schedule({ ...message, onStart: undefined, retried: true });
+      return;
+    }
     const next = this.pending;
     this.pending = null;
     if (next) this.schedule(next);
