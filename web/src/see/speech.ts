@@ -46,6 +46,11 @@ export class Speaker {
     window.speechSynthesis.speak(utterance);
   }
 
+  setRate(rate: number): void {
+    this.rate = rate;
+    saveRate(rate);
+  }
+
   stop(): void {
     if (!this.available) return;
     window.speechSynthesis.cancel();
