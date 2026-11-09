@@ -386,111 +386,64 @@ main.live {
   font: 600 0.75rem/1.5 ui-monospace, monospace;
 }
 
-/* See mode: camera stays visible; top half is a see-through Describe button over it */
-.see-controls {
+/* See mode: the camera is the screen; one big Start/Pause toggle */
+.see-toggle {
   position: absolute;
-  inset: calc(72px + var(--safe-top)) 12px calc(12px + var(--safe-bottom));
-  display: grid;
-  grid-template-rows: 3fr 2fr;
-  gap: 12px;
-}
-
-.see-action {
+  left: 16px;
+  right: 16px;
+  bottom: calc(16px + var(--safe-bottom));
+  height: 22vh;
+  min-height: 120px;
   border: 0;
   border-radius: var(--radius);
-  font-size: 2rem;
-  font-weight: 800;
-  color: var(--ink);
-}
-
-.see-action.describe {
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  padding: 16px;
-  background: transparent;
-  border: 4px solid var(--see);
-}
-
-.see-action-label {
-  padding: 10px 18px;
-  border-radius: 999px;
   background: var(--see);
-  font-size: 1.5rem;
-}
-
-.see-action.ask {
-  background: var(--text);
+  color: var(--ink);
+  font-size: 2.4rem;
+  font-weight: 800;
   opacity: 0.95;
 }
 
-.see-action.ask.listening {
-  background: var(--danger);
+.see-toggle.running {
+  background: rgb(11 13 18 / 0.7);
+  color: var(--text);
+  border: 3px solid var(--see);
 }
 
-.see-action:disabled {
-  opacity: 0.6;
-}
-
-/* Latest announcement, with the camera frame it was based on */
-.see-card {
+.see-status {
   position: absolute;
-  top: calc(80px + var(--safe-top));
-  left: 24px;
-  right: 24px;
+  /* Second row, under Settings / Switch mode, so they never overlap on narrow phones. */
+  top: calc(64px + var(--safe-top));
+  left: 12px;
   display: flex;
-  gap: 12px;
-  padding: 10px;
-  border-left: 8px solid var(--card-color, var(--text));
-  border-radius: 14px;
-  background: rgb(11 13 18 / 0.88);
-  pointer-events: none;
-  animation: card-in 300ms ease-out;
-}
-
-.see-card-frame {
-  width: 96px;
-  height: 72px;
-  flex: none;
-  object-fit: cover;
-  border-radius: 8px;
-}
-
-.see-card-body {
-  min-width: 0;
-}
-
-.see-card-meta {
-  display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 6px 10px;
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
-.see-card-badge {
-  padding: 2px 8px;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 16px;
   border-radius: 999px;
-  background: var(--card-color, var(--text));
-  color: var(--ink);
-  font-weight: 800;
+  background: rgb(11 13 18 / 0.75);
+  font-weight: 700;
 }
 
-.see-card-time {
-  margin-left: auto;
+.see-status .dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
 }
 
-.see-card-text {
-  margin: 4px 0 0;
-  font-size: 1.05rem;
-  font-weight: 600;
+.see-status.status-listening .dot {
+  background: #80ed99;
+}
+
+.see-status.status-looking .dot {
+  background: var(--see);
+  box-shadow: 0 0 0 6px rgb(255 183 3 / 0.3);
 }
 
 .see-flash {
   position: absolute;
   inset: 0;
-  border: 10px solid var(--card-color, var(--text));
+  border: 12px solid var(--card-color, var(--text));
   pointer-events: none;
   animation: flash-out 1.2s ease-out forwards;
 }
@@ -501,27 +454,14 @@ main.live {
 .priority-text { --card-color: var(--see); }
 .priority-scene { --card-color: var(--text); }
 
-@keyframes card-in {
-  from { transform: translateY(-12px); opacity: 0; }
-  to { transform: none; opacity: 1; }
-}
-
 @keyframes flash-out {
   from { opacity: 1; }
   to { opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .see-card,
   .see-flash {
     animation-duration: 1ms;
-  }
-}
-
-@media (min-width: 768px) {
-  .see-controls {
-    grid-template-rows: none;
-    grid-template-columns: 3fr 2fr;
   }
 }
 
@@ -543,14 +483,7 @@ main.live {
   min-height: 44px;
 }
 
-@media (min-width: 768px) {
-  .see-controls {
-    grid-template-rows: none;
-    grid-template-columns: 1fr 1fr;
-  }
-}
-
-/* See mode keeps its two top buttons on one row so they clear the announcement card. */
+/* See mode keeps its two top buttons on one row, clear of the status pill. */
 main.see .top-actions {
   flex-direction: row;
 }

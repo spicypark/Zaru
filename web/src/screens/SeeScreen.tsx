@@ -1,76 +1,78 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createAudioContext } from "../audio/audioContext";
 import { CameraView } from "../media/CameraView";
 import { useMediaStream } from "../media/useMediaStream";
+import { keepScreenOn } from "../media/wakeLock";
 import { goToPicker } from "../modes";
-import { AnnouncementCard } from "../see/AnnouncementCard";
 import { Speaker } from "../see/speech";
-import { useSeeSession, type SeeBusy } from "../see/useSeeSession";
+import { useNarration, type NarrationStatus } from "../see/useNarration";
 
-const ASK_LABEL: Record<SeeBusy, string> = {
-  idle: "Ask a question",
-  describing: "Ask a question",
-  listening: "Listening… tap to send",
-  answering: "Thinking…",
+const STATUS_LABEL: Record<NarrationStatus, string> = {
+  listening: "Narrating",
+  looking: "Looking…",
+  stopped: "Paused",
 };
 
 export function SeeScreen() {
-  const { state, start } = useMediaStream(true);
+  // Camera only: See mode never opens the microphone. On iPhones an open mic switches audio to
+  // call mode, which cuts off and reroutes Zaru's speech.
+  const { state, start, restartVideo } = useMediaStream(false);
   const speaker = useMemo(() => new Speaker(), []);
   const [audioCtx, setAudioCtx] = useState<AudioContext | null>(null);
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
+  const [running, setRunning] = useState(false);
   const [rate, setRate] = useState(speaker.rate);
   const [showSettings, setShowSettings] = useState(false);
   const live = state.status === "live";
 
-  const { busy, log, describeNow, toggleAsk, stopSpeaking } = useSeeSession({
+  const onFrozen = useCallback(() => void restartVideo(), [restartVideo]);
+  const { status, pulse } = useNarration({
+    running: live && running,
     video: live ? video : null,
-    audioStream: live ? state.audioStream : null,
     ctx: audioCtx,
     mirrored: live && state.mirrored,
     speaker,
+    onFrozen,
   });
 
   useEffect(() => () => void audioCtx?.close(), [audioCtx]);
 
-  const latest = log.length > 0 ? log[log.length - 1] : null;
-  const latestPriority = latest?.source === "approach" ? "approach" : latest?.priority;
+  // Keep the screen awake while narrating: an auto-locked iPhone stops the camera.
+  useEffect(() => (live && running ? keepScreenOn() : undefined), [live, running]);
 
-  // Laptop shortcuts: Space = describe, Enter = ask (start/stop), Escape = stop speaking.
+  const toggle = useCallback(() => {
+    setRunning((on) => {
+      speaker.say(on ? "Paused." : "Narration on.", { interrupt: true });
+      return !on;
+    });
+  }, [speaker]);
+
+  // Laptop: Space toggles narration (unless a control has focus), Escape stops speaking.
   useEffect(() => {
     if (!live) return;
     const onKey = (e: KeyboardEvent) => {
-      // Let focused buttons, links and inputs handle their own Enter/Space activation.
       const target = e.target as HTMLElement | null;
-      if (target?.closest("button, a, input, select, textarea")) {
-        if (e.key === "Escape") stopSpeaking();
-        return;
-      }
+      if (e.key === "Escape") speaker.stop();
+      if (target?.closest("button, a, input, select, textarea")) return;
       if (e.key === " ") {
         e.preventDefault();
-        void describeNow();
-      } else if (e.key === "Enter") {
-        e.preventDefault();
-        void toggleAsk();
-      } else if (e.key === "Escape") {
-        stopSpeaking();
+        toggle();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [live, describeNow, toggleAsk, stopSpeaking]);
+  }, [live, toggle, speaker]);
 
   const onStart = async () => {
     // Inside the tap: unlock speech and audio for the session (iOS requirement).
     speaker.say("Starting Zaru See.", { interrupt: true });
     setAudioCtx(createAudioContext());
     const result = await start();
-    speaker.say(
-      result.ok
-        ? "Zaru See is ready. Top half: describe what's around me. Bottom half: ask a question."
-        : result.message,
-      { interrupt: true },
-    );
+    if (result.ok) {
+      setRunning(true);
+    } else {
+      speaker.say(result.message, { interrupt: true });
+    }
   };
 
   const onRate = (value: number) => {
@@ -78,8 +80,7 @@ export function SeeScreen() {
     speaker.setRate(value);
   };
 
-  // No live regions in See mode: Zaru speaks every status itself, and an aria-live region would
-  // make VoiceOver read the same text over speechSynthesis.
+  // No live regions and no on-screen copy of what Zaru says: everything is spoken.
   if (!live) {
     return (
       <main className="see">
@@ -105,32 +106,12 @@ export function SeeScreen() {
         label="Camera view"
         onVideo={setVideo}
       />
-      {/* Flash around the screen edge whenever something new is announced. */}
-      {latest && <div key={latest.id} className={`see-flash priority-${latestPriority}`} />}
-      <div className="see-controls">
-        {/* Top half: see-through, so the live camera stays visible. Tap the picture to describe. */}
-        <button
-          type="button"
-          className="see-action describe"
-          onClick={() => void describeNow()}
-          disabled={busy === "listening"}
-          aria-label="Describe what's around me"
-        >
-          <span className="see-action-label">
-            {busy === "describing" ? "Looking…" : "Describe what's around me"}
-          </span>
-        </button>
-        <button
-          type="button"
-          className={busy === "listening" ? "see-action ask listening" : "see-action ask"}
-          onClick={() => void toggleAsk()}
-          disabled={busy === "describing" || busy === "answering"}
-          aria-label={busy === "listening" ? "Stop and send question" : "Ask a question"}
-        >
-          {ASK_LABEL[busy]}
-        </button>
+      {/* A coloured flash around the edge marks each new spoken update (for sighted helpers). */}
+      {pulse && <div key={pulse.id} className={`see-flash priority-${pulse.priority}`} />}
+      <div className={`see-status status-${status}`} aria-hidden="true">
+        <span className="dot" />
+        {STATUS_LABEL[status]}
       </div>
-      {latest && <AnnouncementCard key={latest.id} entry={latest} />}
       <div className="top-actions">
         <button
           type="button"
@@ -159,6 +140,14 @@ export function SeeScreen() {
           />
         </div>
       )}
+      <button
+        type="button"
+        className={running ? "see-toggle running" : "see-toggle"}
+        onClick={toggle}
+        aria-label={running ? "Pause narration" : "Start narration"}
+      >
+        {running ? "Pause" : "Start"}
+      </button>
     </main>
   );
 }
