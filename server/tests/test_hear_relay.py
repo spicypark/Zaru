@@ -121,6 +121,7 @@ def test_relays_audio_and_returns_captions(fake_openai: FakeOpenAI, tmp_path: Pa
     assert session["type"] == "transcription"
     assert session["audio"]["input"]["format"] == {"type": "audio/pcm", "rate": 24000}
     assert session["audio"]["input"]["turn_detection"] is None
+    assert "Dash0" in session["audio"]["input"]["transcription"]["prompt"]
     assert base64.b64decode(fake_openai.received[1]["audio"]) == pcm
     assert fake_openai.auth == "Bearer sk-test"
 

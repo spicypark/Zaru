@@ -2,7 +2,8 @@
 
 Client -> server over /ws/hear:
   - binary frames: mono PCM16 little-endian at 24 kHz (~100 ms each)
-  - text frames (JSON): {"type": "speech_start"} when the phone's voice detector hears speech,
+  - text frames (JSON): {"type": "speech_start", "turn": n} when the phone's voice detector
+    hears speech and opens turn n (OpenAI streams words before the turn ends; those carry n),
     {"type": "commit", "turn": n, "attributed": bool} at the end of a spoken turn (pause, or a
     cap on long turns). `turn` is the phone's turn number, echoed on that turn's captions so the
     phone can put them in the right speaker's bubble; `attributed` says whether the phone matched
@@ -38,7 +39,7 @@ from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosedError, InvalidHandshake
 
 from zaru.config import Settings
-from zaru.local_stt import Transcriber, get_local_transcriber
+from zaru.local_stt import VOCABULARY_PROMPT, Transcriber, get_local_transcriber
 from zaru.telemetry import meter, tracer
 
 log = logging.getLogger(__name__)
@@ -82,7 +83,8 @@ def session_update(model: str) -> dict:
             "audio": {
                 "input": {
                     "format": {"type": "audio/pcm", "rate": SAMPLE_RATE},
-                    "transcription": {"model": model},
+                    # Same conference vocabulary hint as the local model (Dash0, eBPF, ...).
+                    "transcription": {"model": model, "prompt": VOCABULARY_PROMPT},
                     "turn_detection": None,
                 }
             },
@@ -106,6 +108,9 @@ class _Turns:
         self.pending_commits: deque[tuple[float, int | None]] = deque()
         self.commit_time: dict[str, float] = {}
         self.turn_of: dict[str, int | None] = {}
+        # Turn the phone says is being spoken now; words that stream in before the commit
+        # belong to it.
+        self.open_turn: int | None = None
         self.has_text: set[str] = set()
 
     def committed(self, item_id: str) -> None:
@@ -113,6 +118,11 @@ class _Turns:
             committed_at, turn = self.pending_commits.popleft()
             self.commit_time[item_id] = committed_at
             self.turn_of[item_id] = turn
+
+    def turn_for(self, item_id: str) -> int | None:
+        if item_id not in self.turn_of:
+            self.turn_of[item_id] = self.open_turn
+        return self.turn_of[item_id]
 
     def first_text(self, item_id: str) -> None:
         if item_id in self.has_text:
@@ -151,6 +161,10 @@ async def _phone_to_openai(ws: WebSocket, upstream: ClientConnection, turns: _Tu
             control = json.loads(msg.get("text") or "{}")
         except json.JSONDecodeError:
             continue
+        if control.get("type") == "speech_start":
+            turn = control.get("turn")
+            turns.open_turn = turn if isinstance(turn, int) else None
+            continue
         if control.get("type") != "commit":
             continue
         turn = _commit_turn(control)
@@ -173,7 +187,7 @@ async def _openai_to_phone(ws: WebSocket, upstream: ClientConnection, turns: _Tu
                 {
                     "type": "delta",
                     "item": item,
-                    "turn": turns.turn_of.get(item),
+                    "turn": turns.turn_for(item),
                     "text": event.get("delta", ""),
                 }
             )
