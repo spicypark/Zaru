@@ -13,10 +13,10 @@ export class SpeechGate {
   private turnStartedAt = 0;
 
   constructor(
-    private readonly hangMs = 600,
+    private readonly hangMs = 800,
     /** Adjustable: the local Whisper fallback is more accurate on longer, whole sentences. */
     public maxTurnMs = 5000,
-    private readonly minThreshold = 0.015,
+    private readonly minThreshold = 0.01,
   ) {}
 
   get isSpeaking(): boolean {

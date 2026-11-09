@@ -7,9 +7,12 @@ import { TurnAttributor } from "./speakerAttribution";
 import { SpeechGate } from "./speechGate";
 
 // Audio from just before speech is detected, so first syllables aren't clipped.
-const PREROLL_FRAMES = 3;
+const PREROLL_FRAMES = 5;
 const OPENAI_MAX_TURN_MS = 5000;
 const LOCAL_MAX_TURN_MS = 7000;
+// With continuous streaming, finalise whatever has accumulated after this much quiet, so the
+// upstream buffer never grows without bound and stray words still get a final transcript.
+const IDLE_COMMIT_MS = 10000;
 
 export type HearStatus = SocketStatus | "mic-error";
 
@@ -52,6 +55,11 @@ export function useHearSession(
     let turn = 0;
 
     const gate = new SpeechGate();
+    // OpenAI hears everything (continuous audio) so quiet or distant speech isn't lost to the
+    // loudness gate; the gate then only marks turns for commits and speaker attribution. The
+    // local Whisper fallback stays gated because it invents words from background noise.
+    let continuous = false;
+    let lastCommitAt = performance.now();
     const attributor = new TurnAttributor();
     const socket = new HearSocket((msg) => {
       if (msg.type === "ready") {
@@ -59,6 +67,7 @@ export function useHearSession(
         // Whisper does much worse on sentence fragments, so let local turns run longer before
         // a forced commit. OpenAI keeps short turns for faster captions.
         gate.maxTurnMs = msg.backend === "local" ? LOCAL_MAX_TURN_MS : OPENAI_MAX_TURN_MS;
+        continuous = msg.backend === "openai";
       }
       dispatch(msg);
     }, setStatus);
@@ -72,11 +81,17 @@ export function useHearSession(
         attributor.reset();
         turn += 1;
         socket.sendSpeechStart(turn);
-        preroll.splice(0).forEach((frame) => socket.sendAudio(frame));
+        if (!continuous) preroll.splice(0).forEach((frame) => socket.sendAudio(frame));
       }
       if (gate.isSpeaking || event === "commit") {
         socket.sendAudio(pcm);
         attributor.addVoicedFrame(facesRef.current ?? []);
+      } else if (continuous) {
+        socket.sendAudio(pcm);
+        if (performance.now() - lastCommitAt > IDLE_COMMIT_MS) {
+          socket.sendIdleCommit();
+          lastCommitAt = performance.now();
+        }
       } else {
         preroll.push(pcm);
         if (preroll.length > PREROLL_FRAMES) preroll.shift();
@@ -90,6 +105,7 @@ export function useHearSession(
           lastTurn: { turn: thisTurn, speaker, credits: attributor.lastCredits },
         };
         socket.sendCommit(thisTurn, speaker !== null);
+        lastCommitAt = performance.now();
         if (gate.isSpeaking) {
           // Forced commit on a long monologue: the speaker carries on in a new turn.
           turn += 1;
