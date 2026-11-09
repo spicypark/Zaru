@@ -71,10 +71,16 @@ export function useMediaStream(withAudio: boolean) {
     audioStreamRef.current = null;
   }, []);
 
+  // Camera requests can resolve after the screen has gone away; such tracks must be stopped
+  // immediately rather than stored, or the camera light stays on.
+  const mountedRef = useRef(true);
+
   const publish = useCallback(async (video: MediaStreamTrack, audioStream: MediaStream) => {
     const stream = new MediaStream([video, ...audioStream.getAudioTracks()]);
     const canFlip = (await countCameras()) > 1;
-    setState({ status: "live", stream, audioStream, mirrored: isMirrored(video), canFlip });
+    if (mountedRef.current) {
+      setState({ status: "live", stream, audioStream, mirrored: isMirrored(video), canFlip });
+    }
     return stream;
   }, []);
 
@@ -86,6 +92,10 @@ export function useMediaStream(withAudio: boolean) {
         video: videoConstraints(facingRef.current),
         audio: withAudio ? AUDIO : false,
       });
+      if (!mountedRef.current) {
+        media.getTracks().forEach((t) => t.stop());
+        return { ok: false, message: "Closed." };
+      }
       stop();
       const video = media.getVideoTracks()[0];
       videoTrackRef.current = video;
@@ -99,6 +109,23 @@ export function useMediaStream(withAudio: boolean) {
     }
   }, [withAudio, stop, publish]);
 
+  /** Opens one camera; null if it failed. Stops the track if the screen unmounted meanwhile. */
+  const openCamera = useCallback(async (facing: Facing, exact: boolean) => {
+    try {
+      const media = await navigator.mediaDevices.getUserMedia({
+        video: videoConstraints(facing, exact),
+      });
+      const track = media.getVideoTracks()[0];
+      if (!mountedRef.current) {
+        track.stop();
+        return null;
+      }
+      return track;
+    } catch {
+      return null;
+    }
+  }, []);
+
   /** Switch between the front and back cameras, keeping the microphone running. */
   const flip = useCallback(async () => {
     const audioStream = audioStreamRef.current;
@@ -106,27 +133,39 @@ export function useMediaStream(withAudio: boolean) {
     flippingRef.current = true;
     const previous = facingRef.current;
     const next: Facing = previous === "environment" ? "user" : "environment";
-    // Many phones can only open one camera at a time, so release the current one first.
-    videoTrackRef.current?.stop();
     try {
-      const media = await navigator.mediaDevices.getUserMedia({
-        video: videoConstraints(next, true),
-      });
-      facingRef.current = next;
-      videoTrackRef.current = media.getVideoTracks()[0];
-    } catch {
-      // Couldn't open the other camera; reopen the one we had.
-      const media = await navigator.mediaDevices.getUserMedia({
-        video: videoConstraints(previous),
-      });
-      videoTrackRef.current = media.getVideoTracks()[0];
+      // Many phones can only open one camera at a time, so release the current one first.
+      videoTrackRef.current?.stop();
+      videoTrackRef.current = null;
+
+      let track = await openCamera(next, true);
+      if (track) {
+        facingRef.current = next;
+      } else {
+        // Couldn't open the other camera; reopen the one we had.
+        track = await openCamera(previous, false);
+      }
+      if (!mountedRef.current) return;
+      if (!track) {
+        // Neither camera opened: release the mic too and show an error with a fresh Start.
+        stop();
+        setState({ status: "error", message: "Could not switch cameras. Tap to start again." });
+        return;
+      }
+      videoTrackRef.current = track;
+      await publish(track, audioStream);
     } finally {
       flippingRef.current = false;
     }
-    if (videoTrackRef.current) await publish(videoTrackRef.current, audioStream);
-  }, [publish]);
+  }, [openCamera, publish, stop]);
 
-  useEffect(() => stop, [stop]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      stop();
+    };
+  }, [stop]);
 
   return { state, start, stop, flip };
 }
