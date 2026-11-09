@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { FaceLandmarker } from "@mediapipe/tasks-vision";
+import { trackEvent } from "../telemetry";
 import { createFaceLandmarker, FaceTracker, type Delegate, type TrackedFace } from "./faceTracker";
 
 // ~15 fps is plenty for mouth movement and keeps phones cool.
 const FRAME_INTERVAL_MS = 66;
 // After this many consecutive detection errors on GPU, rebuild the landmarker on CPU.
 const MAX_GPU_ERRORS = 3;
+// How often the health of the detector is reported to telemetry.
+const REPORT_EVERY_S = 30;
 
 export type FaceTracksState = "loading" | "ready" | "unavailable";
 
@@ -43,6 +46,9 @@ export function useFaceTracks(video: HTMLVideoElement | null) {
     let gpuErrors = 0;
     let errors = 0;
     let detections = 0;
+    let reportDetections = 0;
+    let reportErrors = 0;
+    let reportSeconds = 0;
     let stopped = false;
     let rebuilding = false;
     const tracker = new FaceTracker();
@@ -101,7 +107,21 @@ export function useFaceTracks(video: HTMLVideoElement | null) {
 
     const statsTimer = window.setInterval(() => {
       setStats((s) => ({ ...s, fps: detections, errors }));
+      reportDetections += detections;
       detections = 0;
+      reportSeconds += 1;
+      if (reportSeconds >= REPORT_EVERY_S) {
+        if (delegate) {
+          trackEvent("zaru.hear.face_detector", {
+            delegate,
+            fps: reportDetections / reportSeconds,
+            errors: errors - reportErrors,
+          });
+        }
+        reportDetections = 0;
+        reportErrors = errors;
+        reportSeconds = 0;
+      }
     }, 1000);
 
     void load().then(schedule);

@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useRef, useState, type RefObject } from "react";
 import { startMicCapture } from "../audio/micCapture";
 import type { TrackedFace } from "../cv/faceTracker";
+import { trackEvent } from "../telemetry";
 import { captionsReducer } from "./captions";
 import { HearSocket, type CaptionBackend, type SocketStatus } from "./hearSocket";
 import { TurnAttributor } from "./speakerAttribution";
@@ -10,6 +11,20 @@ import { SpeechGate } from "./speechGate";
 const PREROLL_FRAMES = 5;
 const OPENAI_MAX_TURN_MS = 5000;
 const LOCAL_MAX_TURN_MS = 7000;
+// Turns that never get a caption (noise, empty transcripts) are forgotten beyond this many.
+const MAX_PENDING_TURNS = 20;
+
+type Attribution = "face" | "caption_bar";
+/** Bookkeeping for the on-screen caption latency event. Holds turn numbers and times only. */
+type CaptionTiming = {
+  /** Committed turns still waiting for their first caption. */
+  pending: Map<number, { at: number; attribution: Attribution }>;
+  /** Open turns whose streamed words are already on screen. */
+  captioned: Set<number>;
+  /** Caption items already accounted for. */
+  items: Set<string>;
+};
+
 // With continuous streaming, finalise whatever has accumulated after this much quiet, so the
 // upstream buffer never grows without bound and stray words still get a final transcript.
 const IDLE_COMMIT_MS = 10000;
@@ -47,12 +62,44 @@ export function useHearSession(
     () => new Map(),
   );
   const audioDebugRef = useRef<AudioDebug>({ rms: 0, threshold: 0, lastTurn: null });
+  const timingRef = useRef<CaptionTiming>({
+    pending: new Map(),
+    captioned: new Set(),
+    items: new Set(),
+  });
+
+  // Runs after captions are committed to the screen: the first caption of a finished turn
+  // closes the on-screen latency measurement for that turn.
+  useEffect(() => {
+    const timing = timingRef.current;
+    for (const caption of captions) {
+      if (caption.turn === null || timing.items.has(caption.item)) continue;
+      const waiting = timing.pending.get(caption.turn);
+      if (waiting) {
+        timing.pending.delete(caption.turn);
+        trackEvent("zaru.hear.caption", {
+          latency_ms: performance.now() - waiting.at,
+          before_commit: false,
+          backend: backend ?? "unknown",
+          attribution: waiting.attribution,
+        });
+      } else {
+        timing.captioned.add(caption.turn);
+      }
+    }
+    timing.items = new Set(captions.map((c) => c.item));
+  }, [captions, backend]);
 
   useEffect(() => {
     if (!stream || !ctx) return;
     let stopMic: (() => void) | null = null;
     let cancelled = false;
     let turn = 0;
+    let sessionBackend: CaptionBackend | null = null;
+    // Turn numbers restart with each session.
+    const timing = timingRef.current;
+    timing.pending.clear();
+    timing.captioned.clear();
 
     const gate = new SpeechGate();
     // OpenAI hears everything (continuous audio) so quiet or distant speech isn't lost to the
@@ -63,7 +110,8 @@ export function useHearSession(
     const attributor = new TurnAttributor();
     const socket = new HearSocket((msg) => {
       if (msg.type === "ready") {
-        setBackend(msg.backend ?? null);
+        sessionBackend = msg.backend ?? null;
+        setBackend(sessionBackend);
         // Whisper does much worse on sentence fragments, so let local turns run longer before
         // a forced commit. OpenAI keeps short turns for faster captions.
         gate.maxTurnMs = msg.backend === "local" ? LOCAL_MAX_TURN_MS : OPENAI_MAX_TURN_MS;
@@ -108,6 +156,20 @@ export function useHearSession(
           lastTurn: { turn: thisTurn, speaker, credits: attributor.lastCredits },
         };
         socket.sendCommit(thisTurn, speaker !== null);
+        const attribution: Attribution = speaker !== null ? "face" : "caption_bar";
+        if (timing.captioned.delete(thisTurn)) {
+          trackEvent("zaru.hear.caption", {
+            latency_ms: 0,
+            before_commit: true,
+            backend: sessionBackend ?? "unknown",
+            attribution,
+          });
+        } else {
+          timing.pending.set(thisTurn, { at: performance.now(), attribution });
+          if (timing.pending.size > MAX_PENDING_TURNS) {
+            timing.pending.delete(timing.pending.keys().next().value!);
+          }
+        }
         lastCommitAt = performance.now();
         if (gate.isSpeaking) {
           // Forced commit on a long monologue: the speaker carries on in a new turn.

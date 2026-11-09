@@ -1,3 +1,5 @@
+import { trackEvent } from "../telemetry";
+
 export type CaptionBackend = "openai" | "local";
 
 export type ServerMessage =
@@ -22,6 +24,7 @@ export class HearSocket {
   private attempt = 0;
   private closed = false;
   private retryTimer: number | undefined;
+  private droppedAt = 0;
 
   constructor(
     private readonly onMessage: (msg: ServerMessage) => void,
@@ -69,6 +72,12 @@ export class HearSocket {
       if (typeof event.data !== "string") return;
       const msg = JSON.parse(event.data) as ServerMessage;
       if (msg.type === "ready") {
+        if (this.attempt > 0) {
+          trackEvent("zaru.hear.socket_reconnect", {
+            attempts: this.attempt,
+            downtime_ms: performance.now() - this.droppedAt,
+          });
+        }
         this.attempt = 0;
         this.onStatus("ready");
       }
@@ -82,6 +91,7 @@ export class HearSocket {
     ws.onclose = () => {
       if (this.closed) return;
       const delay = RETRY_DELAYS_MS[Math.min(this.attempt, RETRY_DELAYS_MS.length - 1)];
+      if (this.attempt === 0) this.droppedAt = performance.now();
       this.attempt += 1;
       this.onStatus("reconnecting");
       this.retryTimer = window.setTimeout(() => this.connect(), delay);
