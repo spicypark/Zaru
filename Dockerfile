@@ -24,7 +24,7 @@ RUN uv sync --frozen --no-dev
 ENV PATH="/app/.venv/bin:$PATH"
 # Bake the local caption fallback model into the image so it works without network or an
 # OpenAI key, and so the first caption isn't delayed by a download.
-ARG LOCAL_WHISPER_MODEL=base.en
+ARG LOCAL_WHISPER_MODEL=small.en
 RUN python -c "from faster_whisper import WhisperModel; WhisperModel('${LOCAL_WHISPER_MODEL}', device='cpu', compute_type='int8', download_root='/app/models')"
 COPY server/zaru ./zaru
 COPY --from=web /web/dist ./static
