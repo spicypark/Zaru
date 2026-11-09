@@ -3,6 +3,7 @@ import { createAudioContext } from "../audio/audioContext";
 import { CameraView } from "../media/CameraView";
 import { useMediaStream } from "../media/useMediaStream";
 import { goToPicker } from "../modes";
+import { AnnouncementCard } from "../see/AnnouncementCard";
 import { Speaker } from "../see/speech";
 import { useSeeSession, type SeeBusy } from "../see/useSeeSession";
 
@@ -31,6 +32,9 @@ export function SeeScreen() {
   });
 
   useEffect(() => () => void audioCtx?.close(), [audioCtx]);
+
+  const latest = log.length > 0 ? log[log.length - 1] : null;
+  const latestPriority = latest?.source === "approach" ? "approach" : latest?.priority;
 
   // Laptop shortcuts: Space = describe, Enter = ask (start/stop), Escape = stop speaking.
   useEffect(() => {
@@ -101,7 +105,10 @@ export function SeeScreen() {
         label="Camera view"
         onVideo={setVideo}
       />
+      {/* Flash around the screen edge whenever something new is announced. */}
+      {latest && <div key={latest.id} className={`see-flash priority-${latestPriority}`} />}
       <div className="see-controls">
+        {/* Top half: see-through, so the live camera stays visible. Tap the picture to describe. */}
         <button
           type="button"
           className="see-action describe"
@@ -109,7 +116,9 @@ export function SeeScreen() {
           disabled={busy === "listening"}
           aria-label="Describe what's around me"
         >
-          {busy === "describing" ? "Looking…" : "Describe what's around me"}
+          <span className="see-action-label">
+            {busy === "describing" ? "Looking…" : "Describe what's around me"}
+          </span>
         </button>
         <button
           type="button"
@@ -121,11 +130,7 @@ export function SeeScreen() {
           {ASK_LABEL[busy]}
         </button>
       </div>
-      {log.length > 0 && (
-        <p className="see-last" aria-hidden="true">
-          {log[log.length - 1]}
-        </p>
-      )}
+      {latest && <AnnouncementCard key={latest.id} entry={latest} />}
       <div className="top-actions">
         <button
           type="button"
