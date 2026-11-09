@@ -137,3 +137,12 @@ def test_update_reminder_uses_short_reminder_prompt(
         json={"image": JPEG, "mode": "update", "previous": "A door ahead.", "reason": "reminder"},
     )
     assert "hasn't heard anything for a while" in fake.calls[0]["input"][0]["content"][0]["text"]
+
+
+def test_update_start_always_orients(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeOpenAI(scene(speak="A wooden table up close."))
+    res = client_with(fake, tmp_path, monkeypatch).post(
+        "/api/see/describe", json={"image": JPEG, "mode": "update", "reason": "start"}
+    )
+    assert res.json()["speak"] == "A wooden table up close."
+    assert "Narration is starting" in fake.calls[0]["input"][0]["content"][0]["text"]
