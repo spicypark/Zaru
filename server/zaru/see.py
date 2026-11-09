@@ -139,6 +139,17 @@ def _client(api_key: str) -> AsyncOpenAI:
     return AsyncOpenAI(api_key=api_key)
 
 
+# Reasoning models (o-series, gpt-5 family) reject `temperature`; the rest get 0 for the most
+# literal, repeatable descriptions.
+_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5")
+
+
+def _sampling_options(model: str) -> dict:
+    if model.startswith(_REASONING_PREFIXES):
+        return {}
+    return {"temperature": 0}
+
+
 def get_openai(settings: Settings) -> AsyncOpenAI:
     if not settings.openai_api_key or not settings.openai_vision_model:
         raise HTTPException(503, "scene descriptions are not configured")
@@ -169,7 +180,7 @@ async def describe_scene(
                 }
             ],
             text_format=Scene,
-            temperature=0,
+            **_sampling_options(settings.openai_vision_model),
         )
         vision_latency.record((time.monotonic() - started) * 1000, {"mode": mode})
         scene = response.output_parsed

@@ -106,3 +106,9 @@ def test_reports_unconfigured_without_key(tmp_path: Path) -> None:
     app = create_app(Settings(openai_api_key="", static_dir=tmp_path / "missing"))
     res = TestClient(app).post("/api/see/describe", json={"image": JPEG})
     assert res.status_code == 503
+
+
+def test_temperature_only_sent_to_models_that_accept_it() -> None:
+    assert see._sampling_options("gpt-4.1-mini") == {"temperature": 0}
+    for model in ("gpt-5.4-mini", "o4-mini", "o3"):
+        assert see._sampling_options(model) == {}
