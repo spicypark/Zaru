@@ -19,14 +19,10 @@ async function post(path: string, body: unknown, signal?: AbortSignal): Promise<
 
 export function describe(
   image: string,
-  mode: "auto" | "describe",
+  mode: "update" | "auto" | "describe",
   previous = "",
   reason = "",
   signal?: AbortSignal,
 ): Promise<SeeResult> {
   return post("/api/see/describe", { image, mode, previous, reason }, signal);
-}
-
-export function ask(image: string, audio: string): Promise<SeeResult> {
-  return post("/api/see/ask", { image, audio });
 }
