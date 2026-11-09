@@ -385,3 +385,105 @@ main.live {
   background: rgb(11 13 18 / 0.75);
   font: 600 0.75rem/1.5 ui-monospace, monospace;
 }
+
+/* See mode: the camera is the screen; one big Start/Pause toggle */
+.see-toggle {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: calc(16px + var(--safe-bottom));
+  height: 22vh;
+  min-height: 120px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--see);
+  color: var(--ink);
+  font-size: 2.4rem;
+  font-weight: 800;
+  opacity: 0.95;
+}
+
+.see-toggle.running {
+  background: rgb(11 13 18 / 0.7);
+  color: var(--text);
+  border: 3px solid var(--see);
+}
+
+.see-status {
+  position: absolute;
+  /* Second row, under Settings / Switch mode, so they never overlap on narrow phones. */
+  top: calc(64px + var(--safe-top));
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgb(11 13 18 / 0.75);
+  font-weight: 700;
+}
+
+.see-status .dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.see-status.status-listening .dot {
+  background: #80ed99;
+}
+
+.see-status.status-looking .dot {
+  background: var(--see);
+  box-shadow: 0 0 0 6px rgb(255 183 3 / 0.3);
+}
+
+.see-flash {
+  position: absolute;
+  inset: 0;
+  border: 12px solid var(--card-color, var(--text));
+  pointer-events: none;
+  animation: flash-out 1.2s ease-out forwards;
+}
+
+.priority-hazard { --card-color: var(--danger); }
+.priority-people { --card-color: var(--hear); }
+.priority-approach { --card-color: #f72585; }
+.priority-text { --card-color: var(--see); }
+.priority-scene { --card-color: var(--text); }
+
+@keyframes flash-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .see-flash {
+    animation-duration: 1ms;
+  }
+}
+
+.see-settings {
+  position: absolute;
+  top: calc(120px + var(--safe-top));
+  right: 12px;
+  left: 12px;
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-weight: 700;
+}
+
+.see-settings input {
+  width: 100%;
+  min-height: 44px;
+}
+
+/* See mode keeps its two top buttons on one row, clear of the status pill. */
+main.see .top-actions {
+  flex-direction: row;
+}

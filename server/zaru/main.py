@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from zaru.config import Settings, get_settings
 from zaru.hear_relay import hear_session
 from zaru.local_stt import get_local_transcriber
+from zaru.see import create_see_router
 from zaru.telemetry import setup_telemetry
 
 MODES = ("see", "hear")
@@ -39,6 +40,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    app.include_router(create_see_router(settings))
 
     @app.websocket("/ws/hear")
     async def hear(ws: WebSocket) -> None:

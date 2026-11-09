@@ -1,0 +1,252 @@
+import { useEffect, useRef, useState } from "react";
+import type { ObjectDetector } from "@mediapipe/tasks-vision";
+import { Earcons } from "../audio/earcons";
+import { ApproachTracker, createPersonDetector } from "../cv/personDetector";
+import { describe } from "./api";
+import { captureJpeg, clockDirection, difference, thumbnail } from "./frames";
+import type { Speaker } from "./speech";
+
+// --- When to speak: a running narration that adapts to how much the view changes -------------
+const TICK_MS = 400;
+// Mean grey difference (32×32 thumbnails) between now and the last narrated view.
+const BIG_CHANGE = 0.14;
+const MODERATE_CHANGE = 0.06;
+// Motion between consecutive ticks below this counts as "settled" (sharp photo).
+const SETTLED_MOTION = 0.025;
+const SETTLED_TICKS = 2;
+// While walking the view never settles; narrate anyway after this much continuous motion.
+const WALKING_MS = 2500;
+const MIN_GAP_BIG_MS = 2500;
+const MIN_GAP_MODERATE_MS = 6000;
+// When nothing changes, reminders back off from 8 s up to 40 s, and reset on any change.
+const QUIET_START_MS = 8000;
+const QUIET_MAX_MS = 40000;
+const QUIET_GROWTH = 1.6;
+// A camera that delivers no new frames for this long has frozen.
+const FROZEN_MS = 3000;
+// Person detector cadence and the minimum gap between approach alerts.
+const PERSON_INTERVAL_MS = 250;
+const APPROACH_GAP_MS = 5000;
+
+export type NarrationStatus = "stopped" | "looking" | "listening";
+
+/** A new spoken update, for the screen's visual cue (no text: the point is speech). */
+export type Pulse = { id: number; priority: string };
+
+type Options = {
+  running: boolean;
+  video: HTMLVideoElement | null;
+  ctx: AudioContext | null;
+  mirrored: boolean;
+  speaker: Speaker;
+  /** Called when the camera feed looks frozen, so the caller can reopen the camera. */
+  onFrozen: () => void;
+};
+
+/**
+ * Zaru See's continuous narration: watches the camera on-device and asks the vision model for an
+ * update when the view changes enough, when something urgent appears, or (with growing gaps)
+ * when nothing has changed, so the user always has a current picture without constant chatter.
+ */
+export function useNarration({ running, video, ctx, mirrored, speaker, onFrozen }: Options) {
+  const [status, setStatus] = useState<"looking" | "listening">("listening");
+  const [pulse, setPulse] = useState<Pulse | null>(null);
+  const pulseIdRef = useRef(0);
+  const onFrozenRef = useRef(onFrozen);
+  const lastApproachRef = useRef(0);
+
+  useEffect(() => {
+    onFrozenRef.current = onFrozen;
+  }, [onFrozen]);
+
+  // Narration loop.
+  useEffect(() => {
+    if (!running || !video) return;
+    const earcons = ctx ? new Earcons(ctx) : null;
+    let stopped = false;
+    let inFlight = false;
+    let previousThumb: Float32Array | null = null;
+    let lastSentThumb: Float32Array | null = null;
+    let lastSummary = "";
+    let lastUpdateAt = 0;
+    let quietInterval = QUIET_START_MS;
+    let settledTicks = 0;
+    let movingSince = 0;
+    // Time of the last new camera frame: one callback per decoded frame where supported
+    // (Safari 15.4+, Chrome), otherwise any change in the video's playback time.
+    let lastFrameAt = performance.now();
+    let lastVideoTime = -1;
+    // Older browsers lack it even though the DOM typings always declare it.
+    const frameCallbacks =
+      typeof (video as { requestVideoFrameCallback?: unknown }).requestVideoFrameCallback ===
+      "function";
+    let frameHandle = 0;
+    const onFrame = () => {
+      lastFrameAt = performance.now();
+      if (!stopped) frameHandle = video.requestVideoFrameCallback(onFrame);
+    };
+    if (frameCallbacks) frameHandle = video.requestVideoFrameCallback(onFrame);
+    const pollFrames = () => {
+      if (frameCallbacks) return;
+      if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+        lastVideoTime = video.currentTime;
+        lastFrameAt = performance.now();
+      }
+    };
+    let pausedUntil = 0;
+
+    const narrate = async (thumb: Float32Array, reason: string) => {
+      const image = captureJpeg(video);
+      if (!image) return;
+      inFlight = true;
+      lastUpdateAt = performance.now();
+      lastSentThumb = thumb;
+      setStatus("looking");
+      try {
+        const result = await describe(image, "update", lastSummary, reason);
+        if (stopped) return;
+        if (result.scene) lastSummary = result.scene;
+        // Something new: keep updates frequent. Same as before: space reminders out further.
+        quietInterval = result.changed
+          ? QUIET_START_MS
+          : Math.min(QUIET_MAX_MS, quietInterval * QUIET_GROWTH);
+        if (result.speak) {
+          const urgent = result.priority === "hazard";
+          if (urgent) earcons?.hazard();
+          speaker.say(result.speak, { interrupt: urgent });
+          pulseIdRef.current += 1;
+          setPulse({ id: pulseIdRef.current, priority: result.priority });
+        }
+      } catch (err) {
+        if (stopped) return;
+        const unconfigured = err instanceof Error && err.message === "unconfigured";
+        speaker.say(
+          unconfigured
+            ? "Scene descriptions aren't set up on this server."
+            : "I lost the connection. I'll keep trying.",
+        );
+        pausedUntil = performance.now() + (unconfigured ? 60000 : 5000);
+      } finally {
+        inFlight = false;
+        if (!stopped) setStatus("listening");
+      }
+    };
+
+    const tick = () => {
+      if (stopped) return;
+      const now = performance.now();
+      pollFrames();
+      const thumb = thumbnail(video);
+
+      // Frozen camera: the video has stopped delivering new frames. (Comparing pixels is not a
+      // safe signal: a still scene with heavy noise reduction can give identical thumbnails.)
+      // Hidden pages render no frames (and can't reopen the camera on iOS), so only judge
+      // freezes while visible; the media hook reopens a dead camera on return.
+      if (document.visibilityState !== "visible") {
+        lastFrameAt = now;
+      } else if (now - lastFrameAt > FROZEN_MS) {
+        lastFrameAt = now; // give the restart time before checking again
+        onFrozenRef.current();
+      }
+      if (!thumb) return;
+
+      const motion = previousThumb ? difference(previousThumb, thumb) : 1;
+      previousThumb = thumb;
+      if (motion < SETTLED_MOTION) {
+        settledTicks += 1;
+        movingSince = 0;
+      } else {
+        settledTicks = 0;
+        movingSince ||= now;
+      }
+
+      if (inFlight || now < pausedUntil) return;
+      const sinceLast = now - lastUpdateAt;
+      const change = lastSentThumb ? difference(lastSentThumb, thumb) : 1;
+      const settled = settledTicks >= SETTLED_TICKS;
+      const walking = movingSince > 0 && now - movingSince > WALKING_MS;
+      const speaking = speaker.busy;
+
+      if (!lastSentThumb) {
+        void narrate(thumb, "start");
+      } else if (change > BIG_CHANGE && (settled || walking) && sinceLast > MIN_GAP_BIG_MS) {
+        void narrate(thumb, "big_change");
+      } else if (
+        change > MODERATE_CHANGE &&
+        settled &&
+        !speaking &&
+        sinceLast > MIN_GAP_MODERATE_MS
+      ) {
+        void narrate(thumb, "change");
+      } else if (!speaking && sinceLast > quietInterval) {
+        void narrate(thumb, "reminder");
+      }
+    };
+
+    const timer = window.setInterval(tick, TICK_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      if (frameCallbacks && frameHandle) video.cancelVideoFrameCallback(frameHandle);
+      speaker.stop();
+    };
+  }, [running, video, ctx, speaker]);
+
+  // On-device person detector: instant "person approaching" without waiting on the model.
+  useEffect(() => {
+    if (!running || !video) return;
+    const earcons = ctx ? new Earcons(ctx) : null;
+    let detector: ObjectDetector | null = null;
+    let stopped = false;
+    let timestamp = 0;
+    const tracker = new ApproachTracker();
+
+    const timer = window.setInterval(() => {
+      if (!detector || !video.videoWidth) return;
+      timestamp = Math.max(performance.now(), timestamp + 1);
+      try {
+        const result = detector.detectForVideo(video, timestamp);
+        const boxes = result.detections.flatMap((d) =>
+          d.boundingBox
+            ? [
+                {
+                  x: d.boundingBox.originX / video.videoWidth,
+                  y: d.boundingBox.originY / video.videoHeight,
+                  w: d.boundingBox.width / video.videoWidth,
+                  h: d.boundingBox.height / video.videoHeight,
+                },
+              ]
+            : [],
+        );
+        const now = performance.now();
+        for (const event of tracker.update(boxes, now)) {
+          if (now - lastApproachRef.current < APPROACH_GAP_MS) continue;
+          lastApproachRef.current = now;
+          earcons?.hazard();
+          speaker.say(`Person approaching, ${clockDirection(event.x, mirrored)}.`, {
+            interrupt: true,
+          });
+          pulseIdRef.current += 1;
+          setPulse({ id: pulseIdRef.current, priority: "approach" });
+        }
+      } catch {
+        // Skip this frame.
+      }
+    }, PERSON_INTERVAL_MS);
+
+    createPersonDetector()
+      .then((created) => {
+        if (stopped) created.close();
+        else detector = created;
+      })
+      .catch(() => {});
+
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      detector?.close();
+    };
+  }, [running, video, ctx, mirrored, speaker]);
+
+  return { status: (running ? status : "stopped") as NarrationStatus, pulse };
+}

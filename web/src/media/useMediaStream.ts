@@ -7,9 +7,9 @@ export type MediaState =
   | { status: "starting" }
   | {
       status: "live";
-      /** Camera + mic, for display. Replaced when the camera is flipped. */
+      /** Camera (+ mic if requested), for display. Replaced when the camera flips or restarts. */
       stream: MediaStream;
-      /** Mic only, and stable across camera flips, so audio pipelines don't restart. */
+      /** Mic only (empty without audio), stable across camera changes so audio doesn't restart. */
       audioStream: MediaStream;
       mirrored: boolean;
       /** True when the device has more than one camera (front/back). */
@@ -25,6 +25,10 @@ const videoConstraints = (facing: Facing, exact = false): MediaTrackConstraints 
   width: { ideal: 1280 },
   height: { ideal: 720 },
 });
+
+// How long a muted camera track may stay muted before we reopen it, and the retry schedule.
+const MUTE_GRACE_MS = 2000;
+const RESTART_DELAYS_MS = [0, 500, 1500, 3000];
 
 const AUDIO: MediaTrackConstraints = {
   echoCancellation: true,
@@ -56,32 +60,74 @@ async function countCameras(): Promise<number> {
   }
 }
 
-/** Must be started from a user gesture (iOS requirement). Stops all tracks on unmount. */
+/**
+ * Calls `onDead` when the camera track ends, or stays muted for MUTE_GRACE_MS. iOS ends or mutes
+ * the camera on interruptions (calls, Control Center, screen lock, backgrounding, another app
+ * taking the camera, thermal limits). Returns a function that stops watching.
+ */
+function watchTrack(track: MediaStreamTrack, onDead: (reason: string) => void): () => void {
+  let muteTimer: number | undefined;
+  const onEnded = () => onDead("ended");
+  const onMute = () => {
+    window.clearTimeout(muteTimer);
+    muteTimer = window.setTimeout(() => track.muted && onDead("muted"), MUTE_GRACE_MS);
+  };
+  const onUnmute = () => window.clearTimeout(muteTimer);
+  track.addEventListener("ended", onEnded);
+  track.addEventListener("mute", onMute);
+  track.addEventListener("unmute", onUnmute);
+  return () => {
+    window.clearTimeout(muteTimer);
+    track.removeEventListener("ended", onEnded);
+    track.removeEventListener("mute", onMute);
+    track.removeEventListener("unmute", onUnmute);
+  };
+}
+
+/**
+ * Camera (and optionally mic) for a screen. Must be started from a user gesture (iOS requirement).
+ * The camera is watched and reopened automatically if it dies; everything stops on unmount.
+ */
 export function useMediaStream(withAudio: boolean) {
   const [state, setState] = useState<MediaState>({ status: "idle" });
   const videoTrackRef = useRef<MediaStreamTrack | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const facingRef = useRef<Facing>("environment");
-  const flippingRef = useRef(false);
+  const switchingRef = useRef(false);
+  const unwatchRef = useRef<(() => void) | null>(null);
+  // Camera requests can resolve after the screen has gone away; such tracks must be stopped
+  // immediately rather than stored, or the camera light stays on.
+  const mountedRef = useRef(true);
+  // Set below; lets the track watcher call the latest restart function.
+  const restartRef = useRef<(reason: string) => void>(() => {});
 
   const stop = useCallback(() => {
+    unwatchRef.current?.();
+    unwatchRef.current = null;
     videoTrackRef.current?.stop();
     videoTrackRef.current = null;
     audioStreamRef.current?.getTracks().forEach((t) => t.stop());
     audioStreamRef.current = null;
   }, []);
 
-  // Camera requests can resolve after the screen has gone away; such tracks must be stopped
-  // immediately rather than stored, or the camera light stays on.
-  const mountedRef = useRef(true);
-
-  const publish = useCallback(async (video: MediaStreamTrack, audioStream: MediaStream) => {
-    const stream = new MediaStream([video, ...audioStream.getAudioTracks()]);
+  /** Makes `track` the current camera, watches it, and publishes a new display stream. */
+  const adopt = useCallback(async (track: MediaStreamTrack, audioStream: MediaStream) => {
+    unwatchRef.current?.();
+    videoTrackRef.current = track;
+    unwatchRef.current = watchTrack(track, (reason) => restartRef.current(reason));
+    const stream = new MediaStream([track, ...audioStream.getAudioTracks()]);
     const canFlip = (await countCameras()) > 1;
     if (mountedRef.current) {
-      setState({ status: "live", stream, audioStream, mirrored: isMirrored(video), canFlip });
+      setState({ status: "live", stream, audioStream, mirrored: isMirrored(track), canFlip });
     }
     return stream;
+  }, []);
+
+  const releaseVideo = useCallback(() => {
+    unwatchRef.current?.();
+    unwatchRef.current = null;
+    videoTrackRef.current?.stop();
+    videoTrackRef.current = null;
   }, []);
 
   const start = useCallback(async (): Promise<StartResult> => {
@@ -97,17 +143,15 @@ export function useMediaStream(withAudio: boolean) {
         return { ok: false, message: "Closed." };
       }
       stop();
-      const video = media.getVideoTracks()[0];
-      videoTrackRef.current = video;
       audioStreamRef.current = new MediaStream(media.getAudioTracks());
-      const stream = await publish(video, audioStreamRef.current);
+      const stream = await adopt(media.getVideoTracks()[0], audioStreamRef.current);
       return { ok: true, stream };
     } catch (err) {
       const message = describeError(err);
       setState({ status: "error", message });
       return { ok: false, message };
     }
-  }, [withAudio, stop, publish]);
+  }, [withAudio, stop, adopt]);
 
   /** Opens one camera; null if it failed. Stops the track if the screen unmounted meanwhile. */
   const openCamera = useCallback(async (facing: Facing, exact: boolean) => {
@@ -126,18 +170,57 @@ export function useMediaStream(withAudio: boolean) {
     }
   }, []);
 
+  /** Reopen the current camera (same direction) after it froze, ended or was interrupted. */
+  const restartVideo = useCallback(async () => {
+    const audioStream = audioStreamRef.current;
+    if (!audioStream || switchingRef.current || !mountedRef.current) return;
+    switchingRef.current = true;
+    try {
+      releaseVideo();
+      let track: MediaStreamTrack | null = null;
+      for (const delay of RESTART_DELAYS_MS) {
+        await new Promise((r) => window.setTimeout(r, delay));
+        if (!mountedRef.current) return;
+        track = await openCamera(facingRef.current, false);
+        if (track) break;
+      }
+      if (!mountedRef.current) return;
+      if (!track) {
+        stop();
+        setState({ status: "error", message: "The camera stopped. Tap to start again." });
+        return;
+      }
+      await adopt(track, audioStream);
+    } finally {
+      switchingRef.current = false;
+    }
+  }, [openCamera, adopt, releaseVideo, stop]);
+
+  useEffect(() => {
+    restartRef.current = () => void restartVideo();
+  }, [restartVideo]);
+
+  // Coming back to the app: if the camera died while hidden, reopen it.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible" || !audioStreamRef.current) return;
+      const track = videoTrackRef.current;
+      if (!track || track.readyState === "ended" || track.muted) void restartVideo();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [restartVideo]);
+
   /** Switch between the front and back cameras, keeping the microphone running. */
   const flip = useCallback(async () => {
     const audioStream = audioStreamRef.current;
-    if (!audioStream || flippingRef.current) return;
-    flippingRef.current = true;
+    if (!audioStream || switchingRef.current) return;
+    switchingRef.current = true;
     const previous = facingRef.current;
     const next: Facing = previous === "environment" ? "user" : "environment";
     try {
       // Many phones can only open one camera at a time, so release the current one first.
-      videoTrackRef.current?.stop();
-      videoTrackRef.current = null;
-
+      releaseVideo();
       let track = await openCamera(next, true);
       if (track) {
         facingRef.current = next;
@@ -152,12 +235,11 @@ export function useMediaStream(withAudio: boolean) {
         setState({ status: "error", message: "Could not switch cameras. Tap to start again." });
         return;
       }
-      videoTrackRef.current = track;
-      await publish(track, audioStream);
+      await adopt(track, audioStream);
     } finally {
-      flippingRef.current = false;
+      switchingRef.current = false;
     }
-  }, [openCamera, publish, stop]);
+  }, [openCamera, adopt, releaseVideo, stop]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -167,5 +249,5 @@ export function useMediaStream(withAudio: boolean) {
     };
   }, [stop]);
 
-  return { state, start, stop, flip };
+  return { state, start, stop, flip, restartVideo };
 }

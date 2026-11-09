@@ -11,7 +11,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=SERVER_DIR / ".env", extra="ignore")
 
     openai_api_key: str = ""
-    openai_vision_model: str = ""
+    # Chosen by measurement on See-mode prompts: ~2 s per frame, no invented details.
+    openai_vision_model: str = "gpt-4.1-mini"
     openai_live_transcribe_model: str = "gpt-live-transcribe"
     openai_transcribe_model: str = "gpt-transcribe"
     openai_realtime_url: str = "wss://api.openai.com/v1/realtime?intent=transcription"
