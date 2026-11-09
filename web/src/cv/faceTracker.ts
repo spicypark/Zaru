@@ -20,8 +20,21 @@ export type TrackedFace = {
 const ACTIVITY_WINDOW_MS = 400;
 const MIN_ACTIVITY_SAMPLES = 4;
 const MAX_ACTIVITY_WINDOW_MS = 1500;
-const TRACK_TTL_MS = 1000;
+const TRACK_TTL_MS = 1500;
 const MIN_IOU = 0.2;
+// Weight of the new detection when smoothing a face box (lower = steadier, slower to follow).
+const BOX_SMOOTHING = 0.45;
+
+/** Eases a face box toward the new detection, so speech bubbles don't jitter with it. */
+function smoothBox(previous: Box, next: Box): Box {
+  const mix = (a: number, b: number) => a + (b - a) * BOX_SMOOTHING;
+  return {
+    x: mix(previous.x, next.x),
+    y: mix(previous.y, next.y),
+    w: mix(previous.w, next.w),
+    h: mix(previous.h, next.h),
+  };
+}
 const MAX_CENTER_JUMP = 0.15;
 const COLORS = ["#4cc9f0", "#ffb703", "#f72585", "#80ed99", "#c77dff", "#ff8fab"];
 
@@ -144,7 +157,7 @@ export class FaceTracker {
 
       unmatched.delete(bestId);
       const track = this.tracks.get(bestId)!;
-      track.box = det.box;
+      track.box = smoothBox(track.box, det.box);
       track.mouth = det.mouth;
       track.lastSeen = now;
       track.history.push({ t: now, v: det.mouth });
