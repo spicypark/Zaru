@@ -22,7 +22,7 @@ export function HearScreen() {
   const { state, start } = useMediaStream(true);
   const [audioCtx, setAudioCtx] = useState<AudioContext | null>(null);
   const stream = state.status === "live" ? state.stream : null;
-  const { captions, status, speaking } = useHearSession(stream, audioCtx);
+  const { captions, status, speaking, backend } = useHearSession(stream, audioCtx);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -69,6 +69,9 @@ export function HearScreen() {
       <div className={speaking ? "hear-status speaking" : "hear-status"} aria-hidden="true">
         <span className="dot" />
         {status === "ready" && speaking ? "Hearing speech" : STATUS_TEXT[status]}
+        {status === "ready" && backend === "local" && (
+          <span className="backend-tag">Local captions</span>
+        )}
       </div>
       <div className="caption-bar" aria-live="polite">
         {visible.length === 0 ? (

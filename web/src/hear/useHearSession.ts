@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useState } from "react";
 import { startMicCapture } from "../audio/micCapture";
 import { captionsReducer } from "./captions";
-import { HearSocket, type SocketStatus } from "./hearSocket";
+import { HearSocket, type CaptionBackend, type SocketStatus } from "./hearSocket";
 import { SpeechGate } from "./speechGate";
 
 // Audio from just before speech is detected, so first syllables aren't clipped.
@@ -20,13 +20,18 @@ export function useHearSession(stream: MediaStream | null, ctx: AudioContext | n
   const [speaking, setSpeaking] = useState(false);
   // Kept apart from socket status so a later "ready"/"reconnecting" can't hide it.
   const [micError, setMicError] = useState(false);
+  // Which transcription engine the server picked: OpenAI, or the local fallback model.
+  const [backend, setBackend] = useState<CaptionBackend | null>(null);
 
   useEffect(() => {
     if (!stream || !ctx) return;
     let stopMic: (() => void) | null = null;
     let cancelled = false;
 
-    const socket = new HearSocket(dispatch, setStatus);
+    const socket = new HearSocket((msg) => {
+      if (msg.type === "ready") setBackend(msg.backend ?? null);
+      dispatch(msg);
+    }, setStatus);
     const gate = new SpeechGate();
     const preroll: ArrayBuffer[] = [];
 
@@ -64,5 +69,5 @@ export function useHearSession(stream: MediaStream | null, ctx: AudioContext | n
     };
   }, [stream, ctx]);
 
-  return { captions, status: micError ? ("mic-error" as const) : status, speaking };
+  return { captions, status: micError ? ("mic-error" as const) : status, speaking, backend };
 }

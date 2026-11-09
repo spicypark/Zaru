@@ -1,5 +1,7 @@
+export type CaptionBackend = "openai" | "local";
+
 export type ServerMessage =
-  | { type: "ready" }
+  | { type: "ready"; backend?: CaptionBackend }
   | { type: "delta"; item: string; text: string }
   | { type: "final"; item: string; text: string }
   | { type: "failed"; item: string }
