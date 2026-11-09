@@ -143,7 +143,8 @@ export function useNarration({
       try {
         const recent = history.join(" | ");
         const result = await describe(image, "update", recent, reason);
-        if (stopped) return;
+        // Dropped if narration stopped, or the user started asking a question meanwhile.
+        if (stopped || holdRef?.current) return;
         const requestMs = performance.now() - triggeredAt;
         // Something new: reminders stay at the base interval. Nothing new: space them further.
         quietInterval = result.changed
