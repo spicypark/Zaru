@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/fetch-vision-assets.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/fetch-vision-assets.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -12,6 +14,7 @@
   },
   "dependencies": {
     "@dash0/sdk-web": "^0.30.0",
+    "@mediapipe/tasks-vision": "^1.2.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
