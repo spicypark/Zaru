@@ -18,7 +18,10 @@ class Settings(BaseSettings):
 
     # Captions: "auto" uses OpenAI when a key is set and reachable, else the local model.
     transcription_backend: str = "auto"  # auto | openai | local
-    local_whisper_model: str = "base.en"
+    local_whisper_model: str = "small.en"
+    # 1 = greedy. Beam search (5) measured no more accurate on noisy jargon with small.en
+    # and ~50% slower, so greedy is the default.
+    local_whisper_beam_size: int = 1
     # Where the Whisper model lives (baked into the Docker image); None = Hugging Face cache.
     whisper_model_dir: str | None = None
 

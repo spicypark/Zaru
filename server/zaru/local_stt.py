@@ -36,9 +36,26 @@ local_latency = meter.create_histogram(
 )
 
 
+# Conference vocabulary Whisper tends to mangle. Passed as the initial prompt, it biases
+# decoding towards these spellings without forcing them.
+VOCABULARY_PROMPT = (
+    "A conversation at KubeCon, a cloud native conference. Kubernetes, CNCF, eBPF, "
+    "OpenTelemetry, Prometheus, Helm, Istio, Envoy, Argo CD, GitOps, Dash0, Gitar, Sonar, "
+    "observability, platform engineering, SRE, LLM, keynote, breakout session."
+)
+# Characters of the previous caption carried into the next turn's prompt.
+CONTEXT_CHARS = 200
+
+
 class Transcriber(Protocol):
-    async def transcribe(self, pcm16: bytes, deadline: float | None = None) -> str | None:
-        """Text for one turn, or None if `deadline` (monotonic) passed before it could start."""
+    async def transcribe(
+        self, pcm16: bytes, deadline: float | None = None, context: str = ""
+    ) -> str | None:
+        """Text for one turn, or None if `deadline` (monotonic) passed before it could start.
+
+        `context` is the session's previous caption, used to keep sentences that span a
+        pause consistent.
+        """
         ...
 
 
@@ -99,12 +116,16 @@ class WhisperTranscriber:
     def warm_up(self) -> None:
         threading.Thread(target=self._load, daemon=True).start()
 
-    def _transcribe_sync(self, pcm16: bytes) -> str:
+    def _transcribe_sync(self, pcm16: bytes, context: str) -> str:
         model = self._load()
+        prompt = VOCABULARY_PROMPT
+        if context:
+            prompt = f"{prompt} {context[-CONTEXT_CHARS:]}"
         segments, _ = model.transcribe(
             pcm16_24k_to_float_16k(pcm16),
             language="en",
-            beam_size=1,
+            beam_size=self._settings.local_whisper_beam_size,
+            initial_prompt=prompt,
             condition_on_previous_text=False,
             without_timestamps=True,
             vad_filter=False,
@@ -121,7 +142,9 @@ class WhisperTranscriber:
         doubtful = max((s.no_speech_prob for s in segments), default=1.0) > 0.3
         return "" if doubtful and _is_hallucination(text) else text
 
-    async def transcribe(self, pcm16: bytes, deadline: float | None = None) -> str | None:
+    async def transcribe(
+        self, pcm16: bytes, deadline: float | None = None, context: str = ""
+    ) -> str | None:
         async with self._run_lock:
             # Most of the wait for the shared model happens on this lock, so check the
             # deadline only once we hold it.
@@ -130,7 +153,7 @@ class WhisperTranscriber:
             with tracer.start_as_current_span("zaru.stt.local") as span:
                 span.set_attribute("zaru.audio.ms", len(pcm16) * 1000 // (INPUT_RATE * 2))
                 started = time.monotonic()
-                text = await asyncio.to_thread(self._transcribe_sync, pcm16)
+                text = await asyncio.to_thread(self._transcribe_sync, pcm16, context)
                 elapsed = (time.monotonic() - started) * 1000
                 local_latency.record(elapsed)
                 span.set_attribute("zaru.caption.chars", len(text))

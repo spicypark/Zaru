@@ -233,6 +233,7 @@ async def _local_session(ws: WebSocket, transcriber: Transcriber) -> None:
     queue: asyncio.Queue[tuple[str, bytes, float]] = asyncio.Queue()
 
     async def worker() -> None:
+        previous = ""
         while True:
             item, pcm, committed_at = await queue.get()
             # The local model is shared by every phone; a caption this late is no use to a
@@ -244,7 +245,7 @@ async def _local_session(ws: WebSocket, transcriber: Transcriber) -> None:
                 segments.add(1, {**attrs, "outcome": "stale"})
                 continue
             try:
-                text = await transcriber.transcribe(pcm, deadline)
+                text = await transcriber.transcribe(pcm, deadline, previous)
             except Exception as exc:
                 log.warning("local transcription failed: %s", type(exc).__name__)
                 segments.add(1, {**attrs, "outcome": "failed"})
@@ -259,6 +260,7 @@ async def _local_session(ws: WebSocket, transcriber: Transcriber) -> None:
             caption_latency.record(elapsed, attrs)
             final_latency.record(elapsed, attrs)
             segments.add(1, {**attrs, "outcome": "ok"})
+            previous = text
             await ws.send_json({"type": "final", "item": item, "text": text})
 
     worker_task = asyncio.create_task(worker())

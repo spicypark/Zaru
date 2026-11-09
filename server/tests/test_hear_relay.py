@@ -126,9 +126,13 @@ def test_skips_commit_with_too_little_audio(fake_openai: FakeOpenAI, tmp_path: P
 class FakeTranscriber:
     def __init__(self) -> None:
         self.calls: list[bytes] = []
+        self.contexts: list[str] = []
 
-    async def transcribe(self, pcm16: bytes, deadline: float | None = None) -> str | None:
+    async def transcribe(
+        self, pcm16: bytes, deadline: float | None = None, context: str = ""
+    ) -> str | None:
         self.calls.append(pcm16)
+        self.contexts.append(context)
         return "local words"
 
 
@@ -211,3 +215,15 @@ def test_whisper_transcriber_skips_turn_whose_deadline_passed_while_waiting() ->
         return await task
 
     assert asyncio.run(run()) is None
+
+
+def test_local_passes_previous_caption_as_context(
+    fake_openai: FakeOpenAI, local_stt: FakeTranscriber, tmp_path: Path
+) -> None:
+    with client_for(fake_openai, tmp_path, key="").websocket_connect("/ws/hear") as ws:
+        assert ws.receive_json()["backend"] == "local"
+        speak_one_turn(ws)
+        assert ws.receive_json()["item"] == "local_1"
+        speak_one_turn(ws)
+        assert ws.receive_json()["item"] == "local_2"
+    assert local_stt.contexts == ["", "local words"]
