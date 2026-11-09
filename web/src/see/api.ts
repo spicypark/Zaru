@@ -26,3 +26,8 @@ export function describe(
 ): Promise<SeeResult> {
   return post("/api/see/describe", { image, mode, previous, reason }, signal);
 }
+
+/** A spoken question (base64 WAV) about the current frame: transcribed, then answered. */
+export function ask(image: string, audio: string): Promise<SeeResult> {
+  return post("/api/see/ask", { image, audio });
+}
