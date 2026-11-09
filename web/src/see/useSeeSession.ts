@@ -24,6 +24,19 @@ const MAX_QUESTION_MS = 15_000;
 
 export type SeeBusy = "idle" | "describing" | "listening" | "answering";
 
+export type AnnouncementSource = "auto" | "describe" | "ask" | "approach";
+
+/** One thing Zaru said, with the exact camera frame it was based on (shown on screen). */
+export type Announcement = {
+  id: number;
+  text: string;
+  priority: string;
+  source: AnnouncementSource;
+  question?: string | null;
+  image: string;
+  at: number;
+};
+
 type Options = {
   video: HTMLVideoElement | null;
   audioStream: MediaStream | null;
@@ -35,7 +48,8 @@ type Options = {
 /** Everything See mode does: on-demand Describe/Ask, plus automatic change announcements. */
 export function useSeeSession({ video, audioStream, ctx, mirrored, speaker }: Options) {
   const [busy, setBusy] = useState<SeeBusy>("idle");
-  const [log, setLog] = useState<string[]>([]);
+  const [log, setLog] = useState<Announcement[]>([]);
+  const nextIdRef = useRef(1);
   const busyRef = useRef<SeeBusy>("idle");
   const lastSummaryRef = useRef("");
   const earconsRef = useRef<Earcons | null>(null);
@@ -55,15 +69,29 @@ export function useSeeSession({ video, audioStream, ctx, mirrored, speaker }: Op
     setBusy(state);
   };
 
+  const record = useCallback((entry: Omit<Announcement, "id" | "at">) => {
+    const id = nextIdRef.current++;
+    setLog((prev) => [...prev.slice(-9), { ...entry, id, at: Date.now() }]);
+  }, []);
+
   const announce = useCallback(
-    (result: SeeResult, { urgent }: { urgent: boolean }) => {
+    (
+      result: SeeResult,
+      { urgent, source, image }: { urgent: boolean; source: AnnouncementSource; image: string },
+    ) => {
       if (result.scene) lastSummaryRef.current = result.scene;
       if (!result.speak) return;
       if (result.priority === "hazard") earconsRef.current?.hazard();
       speaker.say(result.speak, { interrupt: urgent || result.priority === "hazard" });
-      setLog((prev) => [...prev.slice(-19), result.speak]);
+      record({
+        text: result.speak,
+        priority: result.priority,
+        source,
+        question: result.question,
+        image,
+      });
     },
-    [speaker],
+    [speaker, record],
   );
 
   const explainError = useCallback(
@@ -88,7 +116,7 @@ export function useSeeSession({ video, audioStream, ctx, mirrored, speaker }: Op
     setBusyState("describing");
     const stopTicks = earconsRef.current?.thinking();
     try {
-      announce(await describe(image, "describe"), { urgent: true });
+      announce(await describe(image, "describe"), { urgent: true, source: "describe", image });
     } catch (err) {
       explainError(err);
     } finally {
@@ -140,7 +168,11 @@ export function useSeeSession({ video, audioStream, ctx, mirrored, speaker }: Op
     setBusyState("answering");
     const stopTicks = earconsRef.current?.thinking();
     try {
-      announce(await ask(image, pcmToWavBase64(recording.chunks)), { urgent: true });
+      announce(await ask(image, pcmToWavBase64(recording.chunks)), {
+        urgent: true,
+        source: "ask",
+        image,
+      });
     } catch (err) {
       explainError(err);
     } finally {
@@ -194,7 +226,7 @@ export function useSeeSession({ video, audioStream, ctx, mirrored, speaker }: Op
         );
         // Drop it if the user started their own request meanwhile.
         if (!stopped && busyRef.current === "idle") {
-          announce(result, { urgent: false });
+          announce(result, { urgent: false, source: "auto", image });
           if (result.speak) lastAnnouncedAt = performance.now();
         }
       } catch {
@@ -239,9 +271,10 @@ export function useSeeSession({ video, audioStream, ctx, mirrored, speaker }: Op
         for (const event of tracker.update(boxes, performance.now())) {
           if (busyRef.current !== "idle") continue;
           earconsRef.current?.hazard();
-          speaker.say(`Person approaching, ${clockDirection(event.x, mirrored)}.`, {
-            interrupt: true,
-          });
+          const text = `Person approaching, ${clockDirection(event.x, mirrored)}.`;
+          speaker.say(text, { interrupt: true });
+          const image = captureJpeg(video, 320);
+          if (image) record({ text, priority: "people", source: "approach", image });
         }
       } catch {
         // Skip this frame.
@@ -260,7 +293,7 @@ export function useSeeSession({ video, audioStream, ctx, mirrored, speaker }: Op
       window.clearInterval(timer);
       detector?.close();
     };
-  }, [video, mirrored, speaker]);
+  }, [video, mirrored, speaker, record]);
 
   // Release the mic if the screen closes mid-question.
   useEffect(() => {
