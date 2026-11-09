@@ -1,33 +1,83 @@
+import { useEffect, useMemo, useState } from "react";
+import { createAudioContext } from "../audio/audioContext";
 import { CameraView } from "../media/CameraView";
 import { useMediaStream } from "../media/useMediaStream";
 import { goToPicker } from "../modes";
+import { Speaker } from "../see/speech";
+import { useSeeSession, type SeeBusy } from "../see/useSeeSession";
 
-function speak(text: string) {
-  if (!("speechSynthesis" in window)) return;
-  window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
-}
+const ASK_LABEL: Record<SeeBusy, string> = {
+  idle: "Ask a question",
+  describing: "Ask a question",
+  listening: "Listening… tap to send",
+  answering: "Thinking…",
+};
 
 export function SeeScreen() {
   const { state, start } = useMediaStream(true);
+  const speaker = useMemo(() => new Speaker(), []);
+  const [audioCtx, setAudioCtx] = useState<AudioContext | null>(null);
+  const [video, setVideo] = useState<HTMLVideoElement | null>(null);
+  const [rate, setRate] = useState(speaker.rate);
+  const [showSettings, setShowSettings] = useState(false);
+  const live = state.status === "live";
+
+  const { busy, log, describeNow, toggleAsk, stopSpeaking } = useSeeSession({
+    video: live ? video : null,
+    audioStream: live ? state.audioStream : null,
+    ctx: audioCtx,
+    mirrored: live && state.mirrored,
+    speaker,
+  });
+
+  useEffect(() => () => void audioCtx?.close(), [audioCtx]);
+
+  // Laptop shortcuts: Space = describe, Enter = ask (start/stop), Escape = stop speaking.
+  useEffect(() => {
+    if (!live) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement) return;
+      if (e.key === " ") {
+        e.preventDefault();
+        void describeNow();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        void toggleAsk();
+      } else if (e.key === "Escape") {
+        stopSpeaking();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [live, describeNow, toggleAsk, stopSpeaking]);
 
   const onStart = async () => {
-    // Speaking inside the tap unlocks speech synthesis on iOS for the rest of the session.
-    speak("Starting Zaru See.");
+    // Inside the tap: unlock speech and audio for the session (iOS requirement).
+    speaker.say("Starting Zaru See.", { interrupt: true });
+    setAudioCtx(createAudioContext());
     const result = await start();
-    speak(result.ok ? "Zaru See is ready." : result.message);
+    speaker.say(
+      result.ok
+        ? "Zaru See is ready. Top half: describe what's around me. Bottom half: ask a question."
+        : result.message,
+      { interrupt: true },
+    );
+  };
+
+  const onRate = (value: number) => {
+    setRate(value);
+    speaker.setRate(value);
   };
 
   // No live regions in See mode: Zaru speaks every status itself, and an aria-live region would
   // make VoiceOver read the same text over speechSynthesis.
-
-  if (state.status !== "live") {
+  if (!live) {
     return (
       <main className="see">
         <button
           type="button"
           className="start-button see"
-          onClick={onStart}
+          onClick={() => void onStart()}
           disabled={state.status === "starting"}
         >
           {state.status === "starting" ? "Starting…" : "Start Zaru See"}
@@ -40,11 +90,65 @@ export function SeeScreen() {
 
   return (
     <main className="see live">
-      <CameraView stream={state.stream} mirrored={state.mirrored} label="Camera view" />
-      <p className="status">Zaru See is ready.</p>
-      <button type="button" className="switch-mode" onClick={goToPicker}>
-        Switch mode
-      </button>
+      <CameraView
+        stream={state.stream}
+        mirrored={state.mirrored}
+        label="Camera view"
+        onVideo={setVideo}
+      />
+      <div className="see-controls">
+        <button
+          type="button"
+          className="see-action describe"
+          onClick={() => void describeNow()}
+          disabled={busy === "listening"}
+          aria-label="Describe what's around me"
+        >
+          {busy === "describing" ? "Looking…" : "Describe what's around me"}
+        </button>
+        <button
+          type="button"
+          className={busy === "listening" ? "see-action ask listening" : "see-action ask"}
+          onClick={() => void toggleAsk()}
+          disabled={busy === "describing" || busy === "answering"}
+          aria-label={busy === "listening" ? "Stop and send question" : "Ask a question"}
+        >
+          {ASK_LABEL[busy]}
+        </button>
+      </div>
+      {log.length > 0 && (
+        <p className="see-last" aria-hidden="true">
+          {log[log.length - 1]}
+        </p>
+      )}
+      <div className="top-actions">
+        <button
+          type="button"
+          className="pill-button"
+          onClick={() => setShowSettings((v) => !v)}
+          aria-expanded={showSettings}
+        >
+          Settings
+        </button>
+        <button type="button" className="pill-button" onClick={goToPicker}>
+          Switch mode
+        </button>
+      </div>
+      {showSettings && (
+        <div className="see-settings">
+          <label htmlFor="speech-rate">Speech rate {rate.toFixed(1)}×</label>
+          <input
+            id="speech-rate"
+            type="range"
+            min={0.6}
+            max={1.8}
+            step={0.1}
+            value={rate}
+            onChange={(e) => onRate(Number(e.target.value))}
+            onPointerUp={() => speaker.say("This is the new speech rate.", { interrupt: true })}
+          />
+        </div>
+      )}
     </main>
   );
 }

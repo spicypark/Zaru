@@ -385,3 +385,75 @@ main.live {
   background: rgb(11 13 18 / 0.75);
   font: 600 0.75rem/1.5 ui-monospace, monospace;
 }
+
+/* See mode: two huge actions over the camera */
+.see-controls {
+  position: absolute;
+  inset: calc(72px + var(--safe-top)) 12px calc(12px + var(--safe-bottom));
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  gap: 12px;
+}
+
+.see-action {
+  border: 0;
+  border-radius: var(--radius);
+  font-size: 2rem;
+  font-weight: 800;
+  color: var(--ink);
+  opacity: 0.94;
+}
+
+.see-action.describe {
+  background: var(--see);
+}
+
+.see-action.ask {
+  background: var(--text);
+}
+
+.see-action.ask.listening {
+  background: var(--danger);
+}
+
+.see-action:disabled {
+  opacity: 0.6;
+}
+
+.see-last {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: calc(24px + var(--safe-bottom));
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: rgb(11 13 18 / 0.85);
+  font-size: 1.05rem;
+  pointer-events: none;
+}
+
+.see-settings {
+  position: absolute;
+  top: calc(120px + var(--safe-top));
+  right: 12px;
+  left: 12px;
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-weight: 700;
+}
+
+.see-settings input {
+  width: 100%;
+  min-height: 44px;
+}
+
+@media (min-width: 768px) {
+  .see-controls {
+    grid-template-rows: none;
+    grid-template-columns: 1fr 1fr;
+  }
+}
