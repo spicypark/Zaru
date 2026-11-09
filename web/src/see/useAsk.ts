@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Earcons } from "../audio/earcons";
+import { setAudioSession } from "../audio/audioSession";
 import { startMicCapture } from "../audio/micCapture";
 import { pcmToWavBase64 } from "../audio/wav";
 import { ask } from "./api";
@@ -10,6 +11,9 @@ export type AskState = "idle" | "starting" | "listening" | "answering";
 
 // Longest question; recording stops and sends by itself after this.
 const MAX_QUESTION_MS = 15000;
+// After the mic is released, iOS re-routes audio from call mode back to the loudspeaker; speech
+// started during that switch gets cut off, so wait at least this long before answering.
+const SETTLE_AFTER_MIC_MS = 700;
 // Fewer 100 ms frames than this means no real question was recorded.
 const MIN_FRAMES = 4;
 
@@ -62,6 +66,14 @@ export function useAsk({ video, ctx, speaker }: Options) {
     if (mountedRef.current) setState(next);
   };
 
+  const releasedAtRef = useRef(0);
+
+  /** Back to loudspeaker playback once the mic is closed (see audioSession.ts). */
+  const backToPlayback = () => {
+    setAudioSession("playback");
+    releasedAtRef.current = performance.now();
+  };
+
   const release = () => {
     const recording = recordingRef.current;
     recordingRef.current = null;
@@ -69,8 +81,18 @@ export function useAsk({ video, ctx, speaker }: Options) {
     window.clearTimeout(recording.timer);
     recording.stopCapture();
     recording.mic.getTracks().forEach((t) => t.stop());
+    backToPlayback();
     return recording;
   };
+
+  /** Resolves once the audio route has had time to settle after the mic closed. */
+  const settled = () =>
+    new Promise<void>((resolve) =>
+      window.setTimeout(
+        resolve,
+        Math.max(0, releasedAtRef.current + SETTLE_AFTER_MIC_MS - performance.now()),
+      ),
+    );
 
   const toggle = useCallback(async () => {
     if (!ctx || !video) return;
@@ -80,12 +102,15 @@ export function useAsk({ video, ctx, speaker }: Options) {
       set("starting");
       speaker.stop();
       let mic: MediaStream | null = null;
+      // Recording needs iOS "play-and-record"; release() switches back to playback.
+      setAudioSession("play-and-record");
       try {
         mic = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         });
         if (!mountedRef.current) {
           mic.getTracks().forEach((t) => t.stop());
+          backToPlayback();
           return;
         }
         const chunks: ArrayBuffer[] = [];
@@ -93,6 +118,7 @@ export function useAsk({ video, ctx, speaker }: Options) {
         if (!mountedRef.current) {
           stopCapture();
           mic.getTracks().forEach((t) => t.stop());
+          backToPlayback();
           return;
         }
         const timer = window.setTimeout(() => void toggleRef.current(), MAX_QUESTION_MS);
@@ -101,8 +127,16 @@ export function useAsk({ video, ctx, speaker }: Options) {
         set("listening");
       } catch {
         mic?.getTracks().forEach((t) => t.stop());
+        backToPlayback();
+        // Stay busy (button disabled, narration held) through the settle, then speak, then idle.
+        set("answering");
+        await settled();
+        if (mountedRef.current) speaker.say("I couldn't use the microphone.", { interrupt: true });
         set("idle");
-        speaker.say("I couldn't use the microphone.", { interrupt: true });
+        // Keep narration held until the line has finished, like the answer path.
+        holdRef.current = true;
+        await waitForSilence(speaker);
+        if ((stateRef.current as AskState) === "idle") holdRef.current = false;
       }
       return;
     }
@@ -112,8 +146,14 @@ export function useAsk({ video, ctx, speaker }: Options) {
     earcons.recordStop();
     const image = captureJpeg(video);
     if (!recording || !image || recording.chunks.length < MIN_FRAMES) {
+      set("answering");
+      await settled();
+      if (mountedRef.current) speaker.say("I didn't hear a question.", { interrupt: true });
       set("idle");
-      speaker.say("I didn't hear a question.", { interrupt: true });
+      // Keep narration held until the line has finished, like the answer path.
+      holdRef.current = true;
+      await waitForSilence(speaker);
+      if ((stateRef.current as AskState) === "idle") holdRef.current = false;
       return;
     }
     set("answering");
@@ -121,8 +161,12 @@ export function useAsk({ video, ctx, speaker }: Options) {
     try {
       const result = await ask(image, pcmToWavBase64(recording.chunks));
       if (!mountedRef.current) return;
+      stopTicks();
+      await settled();
       speaker.say(result.speak || "I couldn't answer that.", { interrupt: true });
     } catch (err) {
+      stopTicks();
+      await settled();
       const unconfigured = err instanceof Error && err.message === "unconfigured";
       speaker.say(
         unconfigured
@@ -138,6 +182,8 @@ export function useAsk({ video, ctx, speaker }: Options) {
       await waitForSilence(speaker);
       if ((stateRef.current as AskState) === "idle") holdRef.current = false;
     }
+    // release/settled/set only read and write refs, so they don't need to be dependencies.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctx, video, speaker]);
 
   useEffect(() => {
@@ -155,6 +201,7 @@ export function useAsk({ video, ctx, speaker }: Options) {
         window.clearTimeout(recording.timer);
         recording.stopCapture();
         recording.mic.getTracks().forEach((t) => t.stop());
+        setAudioSession("playback");
       }
     };
   }, []);
