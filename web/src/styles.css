@@ -5,7 +5,7 @@
   /* Distinct from --hear and --text: idle vs speaking, partial vs final must differ. */
   --muted: #a99ba3;
   --see: #dbafc1;
-  --hear: #e2e4f6;
+  --hear: #defffc;
   --ink: #1b1416;
   --accent-deep: #86626e;
   --danger: #ff6b6b;
@@ -230,7 +230,7 @@ main.live {
 
 .hear-status.speaking .dot {
   background: var(--hear);
-  box-shadow: 0 0 0 6px rgb(226 228 246 / 0.3);
+  box-shadow: 0 0 0 6px rgb(222 255 252 / 0.3);
 }
 
 .caption-bar .caption {
