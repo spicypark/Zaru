@@ -38,8 +38,9 @@ export class HearSocket {
     if (this.isReady) this.ws!.send(pcm);
   }
 
-  sendSpeechStart(): void {
-    if (this.isReady) this.ws!.send(JSON.stringify({ type: "speech_start" }));
+  /** Someone started talking; words streamed before the commit are tagged with `turn`. */
+  sendSpeechStart(turn: number): void {
+    if (this.isReady) this.ws!.send(JSON.stringify({ type: "speech_start", turn }));
   }
 
   /** End of a spoken turn; `turn` comes back on that turn's captions. */

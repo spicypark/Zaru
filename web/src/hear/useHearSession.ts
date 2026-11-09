@@ -70,7 +70,8 @@ export function useHearSession(
       if (event === "start") {
         setSpeaking(true);
         attributor.reset();
-        socket.sendSpeechStart();
+        turn += 1;
+        socket.sendSpeechStart(turn);
         preroll.splice(0).forEach((frame) => socket.sendAudio(frame));
       }
       if (gate.isSpeaking || event === "commit") {
@@ -81,7 +82,6 @@ export function useHearSession(
         if (preroll.length > PREROLL_FRAMES) preroll.shift();
       }
       if (event === "commit") {
-        turn += 1;
         const speaker = attributor.finish();
         const thisTurn = turn;
         setTurnSpeakers((prev) => new Map(prev).set(thisTurn, speaker));
@@ -90,7 +90,13 @@ export function useHearSession(
           lastTurn: { turn: thisTurn, speaker, credits: attributor.lastCredits },
         };
         socket.sendCommit(thisTurn, speaker !== null);
-        if (!gate.isSpeaking) setSpeaking(false);
+        if (gate.isSpeaking) {
+          // Forced commit on a long monologue: the speaker carries on in a new turn.
+          turn += 1;
+          socket.sendSpeechStart(turn);
+        } else {
+          setSpeaking(false);
+        }
       }
     })
       .then((stop) => {

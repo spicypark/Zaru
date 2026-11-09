@@ -22,6 +22,9 @@ const CAPTION_TTL_MS = 8000;
 const PARTIAL_TTL_MS = 15000;
 
 const DEBUG = new URLSearchParams(window.location.search).has("debug");
+// Minimum mouth activity for a face to count as "talking right now" (for live words that
+// stream in before a turn ends and is attributed).
+const LIVE_SPEAKER_MIN_ACTIVITY = 0.01;
 
 export function HearScreen() {
   const { state, start, flip } = useMediaStream(true);
@@ -76,12 +79,24 @@ export function HearScreen() {
     (c) => now - c.updatedAt < (c.final ? CAPTION_TTL_MS : PARTIAL_TTL_MS),
   );
   const faceIds = new Set(faces.map((f) => f.id));
+  const liveSpeaker = faces.reduce<(typeof faces)[number] | null>(
+    (best, f) =>
+      f.activity >= LIVE_SPEAKER_MIN_ACTIVITY && (!best || f.activity > best.activity) ? f : best,
+    null,
+  );
   // A caption goes in its speaker's bubble while that face is on screen; otherwise (no clear
   // speaker, or they left the frame) it goes to the caption bar so nothing is ever dropped.
   const bubbles: { caption: (typeof visible)[number]; faceId: number }[] = [];
   const barCaptions: typeof visible = [];
   for (const caption of visible) {
-    const faceId = caption.turn === null ? null : (turnSpeakers.get(caption.turn) ?? null);
+    // Finished turns use the face chosen when the turn ended; words still streaming in for an
+    // open turn follow whoever's mouth is moving most right now.
+    const decided = caption.turn !== null && turnSpeakers.has(caption.turn);
+    const faceId = decided
+      ? (turnSpeakers.get(caption.turn!) ?? null)
+      : !caption.final
+        ? (liveSpeaker?.id ?? null)
+        : null;
     if (faceId !== null && faceIds.has(faceId)) bubbles.push({ caption, faceId });
     else barCaptions.push(caption);
   }
