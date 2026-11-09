@@ -1,0 +1,38 @@
+[project]
+name = "zaru-server"
+version = "0.1.0"
+description = "Zaru backend: serves the PWA and relays audio/vision requests to OpenAI"
+requires-python = "==3.12.*"
+dependencies = [
+    "fastapi>=0.162.2",
+    "httpx>=0.28.1",
+    "openai>=2.54.0",
+    "openlit>=1.45.0",
+    "opentelemetry-api>=1.45.2",
+    "opentelemetry-exporter-otlp-proto-http>=1.45.2",
+    "opentelemetry-instrumentation-fastapi>=0.66b2",
+    "opentelemetry-sdk>=1.45.2",
+    "pydantic-settings>=2.16.2",
+    "uvicorn[standard]>=0.54.0",
+    "websockets>=17.4",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.4",
+]
