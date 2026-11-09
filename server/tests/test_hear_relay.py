@@ -180,3 +180,16 @@ def test_falls_back_to_local_when_key_rejected(fake_openai: FakeOpenAI, tmp_path
     # New sessions skip OpenAI for a while after a fatal error.
     with client.websocket_connect("/ws/hear") as ws:
         assert ws.receive_json() == {"type": "ready", "backend": "local"}
+
+
+def test_local_skips_turns_that_waited_too_long(
+    fake_openai: FakeOpenAI,
+    local_stt: FakeTranscriber,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(hear_relay, "MAX_LOCAL_QUEUE_AGE_S", -1.0)  # every turn is "stale"
+    with client_for(fake_openai, tmp_path, key="").websocket_connect("/ws/hear") as ws:
+        assert ws.receive_json() == {"type": "ready", "backend": "local"}
+        speak_one_turn(ws)
+    assert local_stt.calls == []

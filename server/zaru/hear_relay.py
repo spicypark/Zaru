@@ -223,6 +223,8 @@ async def _openai_session(ws: WebSocket, settings: Settings) -> None:
 
 # Longest turn kept for local transcription; longer buffers are committed automatically.
 MAX_LOCAL_TURN_BYTES = BYTES_PER_SECOND * 15
+# Turns that waited longer than this for the shared local model are skipped.
+MAX_LOCAL_QUEUE_AGE_S = 5.0
 
 
 async def _local_session(ws: WebSocket, transcriber: Transcriber) -> None:
@@ -233,6 +235,11 @@ async def _local_session(ws: WebSocket, transcriber: Transcriber) -> None:
     async def worker() -> None:
         while True:
             item, pcm, committed_at = await queue.get()
+            # The local model is shared by every phone; a caption this late is no use to a
+            # deaf reader, so skip it rather than falling further behind real time.
+            if time.monotonic() - committed_at > MAX_LOCAL_QUEUE_AGE_S:
+                segments.add(1, {**attrs, "outcome": "stale"})
+                continue
             try:
                 text = await transcriber.transcribe(pcm)
             except Exception as exc:
