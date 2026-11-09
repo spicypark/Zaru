@@ -4,6 +4,7 @@ import { Earcons } from "../audio/earcons";
 import { ApproachTracker, createPersonDetector } from "../cv/personDetector";
 import { describe } from "./api";
 import { captureJpeg, clockDirection, difference, thumbnail } from "./frames";
+import { trackEvent, type NarrationReason, type RumEvents } from "../telemetry";
 import type { Speaker } from "./speech";
 
 // --- When to speak: a running narration that adapts to how much the view changes -------------
@@ -45,6 +46,12 @@ const FROZEN_MS = 3000;
 // Person detector cadence and the minimum gap between approach alerts.
 const PERSON_INTERVAL_MS = 250;
 const APPROACH_GAP_MS = 5000;
+
+const PRIORITIES = ["hazard", "people", "text", "scene", "none"] as const;
+type Priority = RumEvents["zaru.see.time_to_speech"]["priority"];
+// The priority comes from the model; only ever report one of the known values.
+const knownPriority = (value: string): Priority =>
+  (PRIORITIES as readonly string[]).includes(value) ? (value as Priority) : "other";
 
 export type NarrationStatus = "stopped" | "looking" | "listening";
 
@@ -115,7 +122,8 @@ export function useNarration({ running, video, ctx, mirrored, speaker, onFrozen 
     };
     let pausedUntil = 0;
 
-    const narrate = async (thumb: Float32Array, reason: string) => {
+    const narrate = async (thumb: Float32Array, reason: NarrationReason) => {
+      const triggeredAt = performance.now();
       const image = captureJpeg(video);
       if (!image) return;
       inFlight = true;
@@ -126,6 +134,7 @@ export function useNarration({ running, video, ctx, mirrored, speaker, onFrozen 
         const recent = history.join(" | ");
         const result = await describe(image, "update", recent, reason);
         if (stopped) return;
+        const requestMs = performance.now() - triggeredAt;
         // Something new: reminders stay at the base interval. Nothing new: space them further.
         quietInterval = result.changed
           ? QUIET_START_MS
@@ -145,7 +154,17 @@ export function useNarration({ running, video, ctx, mirrored, speaker, onFrozen 
           if (history.length > HISTORY_LINES) history.shift();
           lastSpokenAt = performance.now();
           if (urgent) earcons?.hazard();
-          speaker.say(result.speak, { interrupt: urgent });
+          const priority = knownPriority(result.priority);
+          speaker.say(result.speak, {
+            interrupt: urgent,
+            onStart: () =>
+              trackEvent("zaru.see.time_to_speech", {
+                duration_ms: performance.now() - triggeredAt,
+                request_ms: requestMs,
+                reason,
+                priority,
+              }),
+          });
           pulseIdRef.current += 1;
           setPulse({ id: pulseIdRef.current, priority: result.priority });
         }
@@ -258,6 +277,7 @@ export function useNarration({ running, video, ctx, mirrored, speaker, onFrozen 
         for (const event of tracker.update(boxes, now)) {
           if (now - lastApproachRef.current < APPROACH_GAP_MS) continue;
           lastApproachRef.current = now;
+          trackEvent("zaru.see.person_approach", {});
           earcons?.hazard();
           speaker.say(`Person approaching, ${clockDirection(event.x, mirrored)}.`, {
             interrupt: true,

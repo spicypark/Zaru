@@ -21,6 +21,7 @@ from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -31,6 +32,27 @@ log = logging.getLogger(__name__)
 
 tracer = trace.get_tracer("zaru")
 meter = metrics.get_meter("zaru")
+
+# The SDK's default histogram boundaries jump from 1000 ms to 2500 ms, so an SLO such as
+# "95% of captions within 1.5 s" could only be estimated. These edges put a boundary on
+# every latency threshold we alert or report on.
+LATENCY_BUCKETS_MS = (100, 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 5000, 7500, 10000)
+LATENCY_HISTOGRAMS = (
+    "zaru.caption.latency_ms",
+    "zaru.caption.final_latency_ms",
+    "zaru.see.vision_latency_ms",
+    "zaru.stt.local.duration_ms",
+)
+
+
+def latency_views() -> list[View]:
+    return [
+        View(
+            instrument_name=name,
+            aggregation=ExplicitBucketHistogramAggregation(boundaries=LATENCY_BUCKETS_MS),
+        )
+        for name in LATENCY_HISTOGRAMS
+    ]
 
 
 def setup_telemetry(app: FastAPI, settings: Settings) -> None:
@@ -55,6 +77,7 @@ def setup_telemetry(app: FastAPI, settings: Settings) -> None:
         MeterProvider(
             resource=resource,
             metric_readers=[PeriodicExportingMetricReader(OTLPMetricExporter())],
+            views=latency_views(),
         )
     )
 

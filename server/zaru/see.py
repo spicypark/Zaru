@@ -87,6 +87,10 @@ If nothing major is new, set changed to false and speak to an empty string; that
 answer most of the time.
 `speak` is one short sentence of at most 15 words (two only for a hazard plus one other thing)."""
 
+START_INSTRUCTIONS = """Narration is starting for a blind user. In one short sentence of at most \
+12 words, tell them the main thing in front of them (an obstacle, a person, a door, a sign, or \
+plainly what the camera is pointed at, such as a table up close). changed is true."""
+
 REMINDER_INSTRUCTIONS = """The blind user hasn't heard anything for a while. What you \
 recently told them, oldest first: {previous}
 In at most 8 words, name the single most important major thing in front of them right now (an \
@@ -237,6 +241,9 @@ def create_see_router(settings: Settings) -> APIRouter:
             previous = req.previous.strip()[:600] or "nothing yet"
             if req.mode == "auto":
                 instructions = AUTO_INSTRUCTIONS.format(previous=previous)
+            elif req.mode == "update" and req.reason == "start":
+                # Always orient the user when narration starts, even if nothing is "major".
+                instructions = START_INSTRUCTIONS
             elif req.mode == "update" and req.reason == "reminder":
                 instructions = REMINDER_INSTRUCTIONS.format(previous=previous)
             elif req.mode == "update":
