@@ -13,6 +13,22 @@ const MAX_QUESTION_MS = 15000;
 // Fewer 100 ms frames than this means no real question was recorded.
 const MIN_FRAMES = 4;
 
+// Longest an answer is waited on before narration resumes regardless.
+const MAX_ANSWER_MS = 20000;
+
+/** Resolves once the speaker has nothing playing or waiting (or after MAX_ANSWER_MS). */
+function waitForSilence(speaker: Speaker): Promise<void> {
+  const started = performance.now();
+  return new Promise((resolve) => {
+    const timer = window.setInterval(() => {
+      if (!speaker.busy || performance.now() - started > MAX_ANSWER_MS) {
+        window.clearInterval(timer);
+        resolve();
+      }
+    }, 250);
+  });
+}
+
 type Options = {
   video: HTMLVideoElement | null;
   ctx: AudioContext | null;
@@ -74,6 +90,11 @@ export function useAsk({ video, ctx, speaker }: Options) {
         }
         const chunks: ArrayBuffer[] = [];
         const stopCapture = await startMicCapture(ctx, mic, ({ pcm }) => chunks.push(pcm));
+        if (!mountedRef.current) {
+          stopCapture();
+          mic.getTracks().forEach((t) => t.stop());
+          return;
+        }
         const timer = window.setTimeout(() => void toggleRef.current(), MAX_QUESTION_MS);
         recordingRef.current = { chunks, stopCapture, mic, timer };
         earcons.recordStart();
@@ -112,6 +133,10 @@ export function useAsk({ video, ctx, speaker }: Options) {
     } finally {
       stopTicks();
       set("idle");
+      // set("idle") released the hold; keep it until the answer has finished playing.
+      holdRef.current = true;
+      await waitForSilence(speaker);
+      if ((stateRef.current as AskState) === "idle") holdRef.current = false;
     }
   }, [ctx, video, speaker]);
 
