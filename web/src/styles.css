@@ -254,3 +254,134 @@ main.live {
   color: var(--muted);
   font-size: 0.8rem;
 }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Speech bubbles anchored above each speaker's face */
+.bubbles,
+.debug {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.bubble {
+  position: absolute;
+  transform: translateY(-100%);
+  padding: 10px 14px;
+  border: 3px solid var(--speaker);
+  border-radius: 18px;
+  background: rgb(255 255 255 / 0.95);
+  color: var(--ink);
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  transition:
+    left 120ms linear,
+    top 120ms linear;
+}
+
+.bubble::after {
+  content: "";
+  position: absolute;
+  left: var(--tail-x);
+  bottom: -14px;
+  width: 0;
+  height: 0;
+  border-left: 10px solid transparent;
+  border-right: 10px solid transparent;
+  border-top: 14px solid var(--speaker);
+  transform: translateX(-50%);
+}
+
+.bubble.partial {
+  color: #3a4150;
+}
+
+/* Debug overlay (?debug=1) */
+.debug-face {
+  position: absolute;
+  border: 2px dashed;
+}
+
+.debug-label {
+  position: absolute;
+  top: -1.6em;
+  left: 0;
+  padding: 0 4px;
+  color: var(--ink);
+  font: 600 0.75rem/1.4 ui-monospace, monospace;
+}
+
+.debug-bar {
+  position: absolute;
+  left: 0;
+  bottom: -8px;
+  height: 6px;
+}
+
+.debug-level {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: calc(64px + var(--safe-top));
+  height: 8px;
+  border-radius: 4px;
+  background: rgb(255 255 255 / 0.2);
+}
+
+.debug-level span {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--hear);
+}
+
+.debug-level i {
+  position: absolute;
+  top: -4px;
+  width: 2px;
+  height: 16px;
+  background: var(--danger);
+}
+
+.top-actions {
+  position: absolute;
+  top: calc(12px + var(--safe-top));
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.pill-button {
+  min-height: 44px;
+  padding: 8px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(11 13 18 / 0.75);
+  font-weight: 600;
+}
+
+.debug-info {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: calc(80px + var(--safe-top));
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgb(11 13 18 / 0.75);
+  font: 600 0.75rem/1.5 ui-monospace, monospace;
+}
