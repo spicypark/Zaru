@@ -355,3 +355,22 @@ main.live {
   height: 16px;
   background: var(--danger);
 }
+
+.top-actions {
+  position: absolute;
+  top: calc(12px + var(--safe-top));
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.pill-button {
+  min-height: 44px;
+  padding: 8px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(11 13 18 / 0.75);
+  font-weight: 600;
+}

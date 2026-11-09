@@ -24,13 +24,15 @@ const PARTIAL_TTL_MS = 15000;
 const DEBUG = new URLSearchParams(window.location.search).has("debug");
 
 export function HearScreen() {
-  const { state, start } = useMediaStream(true);
+  const { state, start, flip } = useMediaStream(true);
   const [audioCtx, setAudioCtx] = useState<AudioContext | null>(null);
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
-  const stream = state.status === "live" ? state.stream : null;
-  const { faces, tracksRef } = useFaceTracks(stream ? video : null);
+  const live = state.status === "live";
+  // The mic-only stream survives camera flips, so captions keep running while switching.
+  const audioStream = live ? state.audioStream : null;
+  const { faces, tracksRef } = useFaceTracks(live ? video : null);
   const { captions, status, speaking, backend, turnSpeakers, audioDebugRef } = useHearSession(
-    stream,
+    audioStream,
     audioCtx,
     tracksRef,
   );
@@ -133,9 +135,16 @@ export function HearScreen() {
           )}
         </div>
       )}
-      <button type="button" className="switch-mode" onClick={goToPicker}>
-        Switch mode
-      </button>
+      <div className="top-actions">
+        {state.canFlip && (
+          <button type="button" className="pill-button" onClick={() => void flip()}>
+            Flip camera
+          </button>
+        )}
+        <button type="button" className="pill-button" onClick={goToPicker}>
+          Switch mode
+        </button>
+      </div>
     </main>
   );
 }
