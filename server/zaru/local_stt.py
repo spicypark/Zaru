@@ -91,13 +91,17 @@ class WhisperTranscriber:
             without_timestamps=True,
             vad_filter=False,
         )
+        segments = list(segments)
         kept = [
             s.text.strip()
             for s in segments
             if not (s.no_speech_prob > 0.6 and s.avg_logprob < -0.8)
         ]
         text = " ".join(t for t in kept if t).strip()
-        return "" if _is_hallucination(text) else text
+        # "Thank you." / "Okay." are often real speech; drop them only when Whisper also
+        # doubted there was any speech in the turn.
+        doubtful = max((s.no_speech_prob for s in segments), default=1.0) > 0.3
+        return "" if doubtful and _is_hallucination(text) else text
 
     async def transcribe(self, pcm16: bytes) -> str:
         async with self._run_lock:
