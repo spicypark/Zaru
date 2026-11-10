@@ -13,7 +13,12 @@ export type AskState = "idle" | "starting" | "listening" | "answering";
 const MAX_QUESTION_MS = 15000;
 // After the mic is released, iOS re-routes audio from call mode back to the loudspeaker; speech
 // started during that switch gets cut off, so wait at least this long before answering.
-const SETTLE_AFTER_MIC_MS = 700;
+const SETTLE_AFTER_MIC_MS = 1200;
+// iOS switches the audio route lazily, when the next speech starts, which clips its first part.
+// A short primer absorbs that switch; the answer follows after this gap.
+const PRIMER = "Okay.";
+const PRIMER_GAP_MS = 900;
+const ANSWER_RETRIES = 3;
 // Fewer 100 ms frames than this means no real question was recorded.
 const MIN_FRAMES = 4;
 
@@ -163,7 +168,12 @@ export function useAsk({ video, ctx, speaker }: Options) {
       if (!mountedRef.current) return;
       stopTicks();
       await settled();
-      speaker.say(result.speak || "I couldn't answer that.", { interrupt: true });
+      if (!mountedRef.current) return;
+      speaker.say(PRIMER, { interrupt: true });
+      await new Promise((resolve) => window.setTimeout(resolve, PRIMER_GAP_MS));
+      if (!mountedRef.current) return;
+      // Not an interrupt: it waits for the primer to finish rather than cancelling it.
+      speaker.say(result.speak || "I couldn't answer that.", { retries: ANSWER_RETRIES });
     } catch (err) {
       stopTicks();
       await settled();
