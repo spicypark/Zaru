@@ -31,10 +31,12 @@ const MIN_SPEAK_MS = 800;
 const CUT_OFF_FRACTION = 0.35;
 const RETRY_MIN_CHARS = 20;
 const MS_PER_CHAR = 55;
+// Retries wait longer than a plain cancel, so they land after the audio route has switched.
+const RETRY_SETTLE_MS = 600;
 // Safety net: no single message of ours takes longer than this to say.
 const MAX_SPEAK_MS = 20000;
 
-type Message = { text: string; onStart?: () => void; retried?: boolean };
+type Message = { text: string; onStart?: () => void; retriesLeft: number };
 
 /**
  * Zaru's voice. Uses speechSynthesis (not aria-live), so it never talks over VoiceOver's own
@@ -73,12 +75,20 @@ export class Speaker {
   }
 
   /** `onStart` fires when the device actually begins speaking this message (if it does). */
+  /**
+   * `retries`: how many times to say it again if it gets cut off almost immediately (default 1;
+   * important one-off messages like an answer to the user's question use more).
+   */
   say(
     text: string,
-    { interrupt = false, onStart }: { interrupt?: boolean; onStart?: () => void } = {},
+    {
+      interrupt = false,
+      onStart,
+      retries = 1,
+    }: { interrupt?: boolean; onStart?: () => void; retries?: number } = {},
   ): void {
     if (!this.available || !text.trim()) return;
-    const message = { text, onStart };
+    const message = { text, onStart, retriesLeft: retries };
     if (interrupt) {
       this.pending = null;
       this.cancelCurrent();
@@ -173,13 +183,13 @@ export class Speaker {
     const expected = ((message?.text.length ?? 0) * MS_PER_CHAR) / this.rate;
     const cutOff =
       message &&
-      !message.retried &&
+      message.retriesLeft > 0 &&
       message.text.length >= RETRY_MIN_CHARS &&
       elapsed < expected * CUT_OFF_FRACTION;
     if (cutOff) {
-      // Treat it like a cancel: wait for the audio route to settle, then say it once more.
-      this.lastCancelAt = performance.now();
-      this.schedule({ ...message, onStart: undefined, retried: true });
+      // Wait for the audio route to settle (longer than a plain cancel), then say it again.
+      this.lastCancelAt = performance.now() + RETRY_SETTLE_MS - CANCEL_SETTLE_MS;
+      this.schedule({ ...message, onStart: undefined, retriesLeft: message.retriesLeft - 1 });
       return;
     }
     const next = this.pending;
